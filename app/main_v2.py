@@ -87,12 +87,6 @@ st.markdown("""
         color: #333;
         border: 1px solid #f0f2f6;
     }
-    /* 選択中のボタン (primary) */
-    .stButton>button[kind="primary"] {
-        background-color: #002060 !important; /* 紺色で塗りつぶし */
-        color: white !important; /* 白文字 */
-        border: 1px solid #002060 !important; /* 枠線の色も統一 */
-    }
     /* サイドバーの通常ボタンのホバー時 */
     div[data-testid="stSidebarUserContent"] .stButton>button[kind="secondary"]:hover {
         background-color: #e6f0ff !important;
