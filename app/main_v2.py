@@ -4804,8 +4804,8 @@ elif selected_analysis == "使用ガイド":
 
     ---
 
-    まずは「**AIによる分析・考察**」ページで、あなたのLPの課題を入力して、AIに分析させてみましょう！
-    """)
+    まずは「<a href="?page=AIによる分析・考察#top-anchor" target="_self">**AIによる分析・考察**</a>」ページで、あなたのLPの課題を入力して、AIに分析させてみましょう！
+    """, unsafe_allow_html=True)
 
 # タブ11: 専門用語解説
 elif selected_analysis == "専門用語解説":
