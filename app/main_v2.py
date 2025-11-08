@@ -99,11 +99,13 @@ st.markdown("""
         color: #333 !important;
         border: 1px solid #002060 !important;
     }
-    /* コンテンツエリアのプライマリボタン（AI分析を実行など）は赤色にする */
-    section.main .stButton>button[kind="primary"] {
+    /* コンテンツエリアのプライマリボタン（AI分析を実行など）とダウンロードボタンを赤色にする */
+    section.main .stButton>button[kind="primary"],
+    section.main div[data-testid="stDownloadButton"] > button {
         background-color: #ff4b4b !important;
         color: white !important;
         border-color: #ff4b4b !important;
+        transition: all 0.2s;
     }
     /* コンテンツエリアの通常ボタン（よくある質問など）のホバー時とフォーカス時のスタイルを統一し、赤枠を防ぐ */
     section.main .stButton>button[kind="secondary"]:hover,
@@ -4800,6 +4802,7 @@ elif selected_analysis == "使用ガイド":
     - **広告分析**: キャンペーン別、広告コンテンツ別などでデータを深掘りし、パフォーマンスの差を生んでいる要因を探ります。
     - **インタラクション分析**: CTAボタンや各種リンクなど、クリック可能な要素のパフォーマンスを分析し、ユーザーの関心事を特定します。
     - **動画・スクロール分析**: 動画の視聴状況やユーザーのスクロール行動を分析し、コンテンツのエンゲージメントを評価します。
+    - **瞬フォーム分析**: フォーム入力の各ステップでのユーザーの動きを分析し、離脱ポイントや改善点を特定します。
     
     #### ヘルプ
     - **使用ガイド**: このページです。ツールの使い方を確認できます。
