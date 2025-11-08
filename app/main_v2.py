@@ -67,7 +67,7 @@ st.markdown("""
     }
     /* メインコンテンツの上部余白を調整してサイドバーと高さを合わせる */
     .main > div:first-child {
-        padding-top: 1.8rem !important;
+        padding-top: 0rem !important;
     }
     .stTabs [data-baseweb="tab-list"] {
         gap: 2rem;
