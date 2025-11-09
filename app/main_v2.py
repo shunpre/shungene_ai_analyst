@@ -16,20 +16,13 @@ except ImportError:
 import time # ファイルの先頭でインポート
 # scipyをインポート（A/Bテストの有意差検定で使用）
 
-# --- サイドバーの初期状態を決定 ---
-# セッションの初回実行時のみサイドバーを開く
-if 'is_first_run' not in st.session_state:
-    st.session_state.is_first_run = True
-    initial_sidebar_state = "expanded"
-else:
-    initial_sidebar_state = "auto"
-
 # ページ設定
 st.set_page_config(
     page_title="瞬ジェネ AIアナライザー",
     page_icon="https://shungene.lm-c.jp/favicon.png",
     layout="wide",
-    initial_sidebar_state=initial_sidebar_state,
+    # "auto"に設定することで、PCでは展開、スマホでは収納された状態で初期表示される
+    initial_sidebar_state="auto",
 )
 
 # 上部のオレンジ色のバーを非表示にするためのカスタムCSS
