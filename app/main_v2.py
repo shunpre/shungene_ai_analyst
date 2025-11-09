@@ -21,7 +21,7 @@ st.set_page_config(
     page_title="瞬ジェネ AIアナライザー",
     page_icon="https://shungene.lm-c.jp/favicon.png",
     layout="wide",
-    initial_sidebar_state="auto"
+    initial_sidebar_state="auto",
 )
 
 # ブラウザがスクロールする先の「基点」を設置
