@@ -21,8 +21,8 @@ st.set_page_config(
     page_title="瞬ジェネ AIアナライザー",
     page_icon="https://shungene.lm-c.jp/favicon.png",
     layout="wide",
-    # "auto"に設定することで、PCでは展開、スマホでは収納された状態で初期表示される
-    initial_sidebar_state="auto",
+    # PCでは常に展開された状態にするため "expanded" に固定
+    initial_sidebar_state="expanded",
 )
 
 # 上部のオレンジ色のバーを非表示にするためのカスタムCSS
@@ -193,6 +193,19 @@ st.markdown("""
     @media (max-width: 768px) {
         .mobile-br {
             display: block;
+        }
+    }
+
+    /* スマホ表示の時だけ、サイドバーを強制的に閉じる */
+    @media (max-width: 768px) {
+        /* 
+         * Streamlitはページ遷移後もサイドバーの状態を記憶してしまうため、
+         * CSSで強制的にサイドバーを非表示にし、開閉ボタンだけを残す。
+         * これにより、スマホでは常に閉じた状態から始まるように見える。
+         */
+        section[data-testid="stSidebar"] > div:first-child {
+            transform: translateX(-100%);
+            transition: transform 300ms ease-in-out 0s;
         }
     }
 </style>
