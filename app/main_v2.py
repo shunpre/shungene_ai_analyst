@@ -24,6 +24,16 @@ st.set_page_config(
     initial_sidebar_state="auto",
 )
 
+# 上部のオレンジ色のバーを非表示にするためのカスタムCSS
+hide_decoration_bar_style = '''
+    <style>
+        div[data-testid="stDecoration"] {
+            display: none;
+        }
+    </style>
+'''
+st.markdown(hide_decoration_bar_style, unsafe_allow_html=True)
+
 # ブラウザがスクロールする先の「基点」を設置
 st.markdown('<a id="top-anchor"></a>', unsafe_allow_html=True)
 
@@ -34,6 +44,151 @@ def navigate_to(page_name):
         st.query_params["page"] = page_name
     except AttributeError:
         st.experimental_set_query_params(page=page_name)
+
+# カスタムCSS
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 2.5rem;
+        font-weight: bold;
+        color: #002060;
+        margin-bottom: 1rem;
+    }
+    .sub-header {
+        font-size: 1.5rem;
+        font-weight: bold;
+        color: #2c3e50;
+        margin-top: 2rem;
+        margin-bottom: 1rem;
+    }
+    .metric-card {
+        background-color: #f8f9fa;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        border-left: 4px solid #002060;
+    }
+    /* メインコンテンツの上部余白を調整してサイドバーと高さを合わせる */
+    .main > div:first-child {
+        padding-top: 1.8rem !important;
+    }
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 2rem;
+    }
+    .graph-description {
+        color: #666;
+        font-size: 0.9rem;
+        margin-bottom: 1rem;
+        padding: 0.5rem;
+        background-color: #f8f9fa;
+        border-radius: 0.3rem;
+        border-left: 3px solid #002060;
+    }
+    /* 通常のボタン (secondary) */
+    .stButton>button[kind="secondary"] {
+        background-color: #f0f2f6;
+        color: #333;
+        border: 1px solid #f0f2f6;
+    }
+    /* サイドバーの通常ボタンのホバー時 */
+    div[data-testid="stSidebarUserContent"] .stButton>button[kind="secondary"]:hover {
+        background-color: #e6f0ff !important;
+        color: #333 !important;
+        border: 1px solid #002060 !important;
+    }
+    /* コンテンツエリアのプライマリボタン（AI分析を実行など）とダウンロードボタンを赤色にする */
+    section.main .stButton>button[kind="primary"],
+    section.main div[data-testid="stDownloadButton"] > button {
+        background-color: #ff4b4b !important;
+        color: white !important;
+        border-color: #ff4b4b !important;
+        transition: all 0.2s;
+    }
+    /* コンテンツエリアの通常ボタン（よくある質問など）のホバー時とフォーカス時のスタイルを統一し、赤枠を防ぐ */
+    section.main .stButton>button[kind="secondary"]:hover,
+    section.main .stButton>button[kind="secondary"]:focus,
+    section.main .stButton>button[kind="secondary"]:focus-visible {
+        background-color: #e6f0ff !important;
+        color: #333 !important;
+        border: 1px solid #002060 !important;
+        box-shadow: none !important; /* フォーカス時の影を消す */
+    }
+    /* st.info のスタイルを強制的に青系に固定 */
+    div[data-testid="stInfo"] {
+        background-color: #e6f3ff !important;
+        border-color: #1c83e1 !important;
+        color: #000 !important;
+    }
+    /* サイドバーの開閉ボタンのSVGアイコンを非表示にする */
+    button[data-testid="stSidebarCollapseButton"] > svg {
+        display: none;
+    }
+
+    /* サイドバーが開いている時（閉じるボタン）のアイコン */
+    body[data-sidebar-state="expanded"] button[data-testid="stSidebarCollapseButton"]::before {
+        content: '<';
+        font-size: 1.6rem;
+        color: #666;
+        font-weight: bold;
+    }
+
+    /* サイドバーが閉じている時（開くボタン）のアイコン */
+    body[data-sidebar-state="collapsed"] button[data-testid="stSidebarCollapseButton"]::before {
+        content: '>';
+        font-size: 1.6rem;
+        color: #666;
+        font-weight: bold;
+    }
+    /* タイトル横のリンクアイコンを非表示にする */
+    h1 a, h2 a, h3 a, h4 a, h5 a, h6 a {
+        /* リンクアイコンを非表示にするためのより強力なセレクタ */
+        visibility: hidden;
+        display: none !important;
+    }
+    /* サイドバーリンクの基本スタイル (非選択時 = secondary) */
+    a.sidebar-link {
+        display: block; /* ボタンのように振る舞わせる */
+        width: 100%;
+        padding: 0.5rem 0.75rem; /* st.buttonのpaddingに合わせる */
+        border-radius: 0.5rem;
+        text-decoration: none; /* 下線を消す */
+        font-weight: 400; /* 通常の太さ */
+        box-sizing: border-box; /* paddingを含めてwidth 100%にする */
+
+        /* secondaryボタンのスタイルを再現 */
+        background-color: #f0f2f6;
+        color: #333;
+        border: 1px solid #f0f2f6;
+        transition: all 0.2s;
+    }
+
+    /* ホバー時のスタイル (非選択時) */
+    a.sidebar-link:hover {
+        background-color: #e6f0ff !important;
+        color: #333 !important;
+        border: 1px solid #002060 !important;
+        text-decoration: none; /* ホバー時も下線なし */
+    }
+
+    /* 選択中のリンクのスタイル (primary) */
+    a.sidebar-link.active {
+        /* primaryボタンのスタイルを再現 */
+        background-color: #002060 !important;
+        color: white !important;
+        border: 1px solid #002060 !important;
+        font-weight: bold; /* 選択中を分かりやすく */
+    }
+
+    /* スマホでのみ表示される改行タグ */
+    .mobile-br {
+        display: none;
+    }
+    @media (max-width: 768px) {
+        .mobile-br {
+            display: block;
+        }
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # --- 堅牢化のためのヘルパー関数 ---
 def safe_rate(numerator, denominator):
