@@ -69,7 +69,7 @@ st.markdown("""
     }
     /* メインコンテンツの上部余白を調整してサイドバーと高さを合わせる */
     .main > div:first-child {
-        padding-top: 0.5rem !important;
+        padding-top: 1.8rem !important;
     }
     .stTabs [data-baseweb="tab-list"] {
         gap: 2rem;
@@ -176,6 +176,13 @@ st.markdown("""
         color: white !important;
         border: 1px solid #002060 !important;
         font-weight: bold; /* 選択中を分かりやすく */
+    }
+
+    /* --- PC表示でのサイドバー幅を調整 --- */
+    @media (min-width: 768px) {
+        section[data-testid="stSidebar"] {
+            width: 350px !important;
+        }
     }
 
     /* スマホでのみ表示される改行タグ */
