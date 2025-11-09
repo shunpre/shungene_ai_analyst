@@ -1,5 +1,5 @@
 """
-瞬ジェネ AIアナリスト - Step 2完成版
+瞬ジェネ AIアナライザー - Step 2完成版
 グラフ説明と比較機能を追加
 """
 
@@ -18,7 +18,7 @@ import time # ファイルの先頭でインポート
 
 # ページ設定
 st.set_page_config(
-    page_title="瞬ジェネ AIアナリスト",
+    page_title="瞬ジェネ AIアナライザー",
     page_icon="https://shungene.lm-c.jp/favicon.png",
     layout="wide",
     initial_sidebar_state="auto"
@@ -325,7 +325,7 @@ st.sidebar.markdown(
         margin-bottom: 1rem;
         line-height: 1.3;
         text-decoration: none;">
-        瞬ジェネ<br>AIアナリスト
+        瞬ジェネ<br>AIアナライザー
     </a>
     """, unsafe_allow_html=True)
 st.sidebar.markdown("---")
@@ -351,7 +351,7 @@ st.session_state.selected_analysis = selected_analysis
 
 # グルーピングされたメニュー項目
 menu_groups = {
-    "AIアナリスト": ["AIによる分析・考察"],
+    "AIアナライザー": ["AIによる分析・考察"],
     "基本分析": ["リアルタイムビュー", "全体サマリー", "時系列分析", "デモグラフィック情報", "アラート"],
     "LP最適化分析": ["ページ分析", "A/Bテスト分析"],
     "詳細分析": ["広告分析", "インタラクション分析", "動画・スクロール分析", "瞬フォーム分析"],
@@ -5380,4 +5380,4 @@ elif selected_analysis == "瞬フォーム分析":
 
 # フッター
 st.markdown("---")
-st.markdown("**瞬ジェネ AIアナリスト** - Powered by Streamlit & Gemini 2.5 Pro")
+st.markdown("**瞬ジェネ AIアナライザー** - Powered by Streamlit & Gemini 2.5 Pro")
