@@ -25,12 +25,13 @@ st.set_page_config(
 )
 
 # 上部のオレンジ色のバーを非表示にするためのカスタムCSS
+# div[data-testid="stDecoration"] を使うのが最も的確
 hide_decoration_bar_style = '''
     <style>
-        header {visibility: hidden;}
+        div[data-testid="stDecoration"] {display: none;}
     </style>
 '''
-#st.markdown(hide_decoration_bar_style, unsafe_allow_html=True)
+st.markdown(hide_decoration_bar_style, unsafe_allow_html=True)
 
 # ブラウザがスクロールする先の「基点」を設置
 st.markdown('<a id="top-anchor"></a>', unsafe_allow_html=True)
