@@ -16,12 +16,22 @@ except ImportError:
 import time # ファイルの先頭でインポート
 # scipyをインポート（A/Bテストの有意差検定で使用）
 
+# --- サイドバーの初期状態を決定 ---
+# 初回アクセス時（クエリパラメータなし）はメニューを開き、
+# ページ遷移後（クエリパラメータあり）は閉じる
+try:
+    # Streamlit 1.10.0以降
+    is_first_load = not st.query_params
+except AttributeError:
+    # 古いバージョン向け
+    is_first_load = not st.experimental_get_query_params()
+
 # ページ設定
 st.set_page_config(
     page_title="瞬ジェネ AIアナライザー",
     page_icon="https://shungene.lm-c.jp/favicon.png",
     layout="wide",
-    initial_sidebar_state="auto",
+    initial_sidebar_state="expanded" if is_first_load else "collapsed",
 )
 
 # 上部のオレンジ色のバーを非表示にするためのカスタムCSS
