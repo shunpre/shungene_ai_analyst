@@ -199,13 +199,14 @@ st.markdown("""
     /* スマホ表示の時だけ、サイドバーを強制的に閉じる */
     @media (max-width: 768px) {
         /* 
-         * Streamlitはページ遷移後もサイドバーの状態を記憶してしまうため、
-         * CSSで強制的にサイドバーを非表示にし、開閉ボタンだけを残す。
-         * これにより、スマホでは常に閉じた状態から始まるように見える。
+         * Streamlitはページ遷移後もサイドバーの表示状態を記憶してしまうため、
+         * ページ読み込み時にサイドバーが開いている状態(expanded)の場合に限り、
+         * 強制的に閉じる(collapsed)状態のスタイルを適用する。
+         * これにより、スマホでは常に閉じた状態から始まるように見え、開閉ボタンは常に表示される。
          */
-        section[data-testid="stSidebar"] > div:first-child {
+        body[data-sidebar-state="expanded"] section[data-testid="stSidebar"] > div:first-child {
             transform: translateX(-100%);
-            transition: transform 300ms ease-in-out 0s;
+            transition: transform 300ms ease-in-out;
         }
     }
 </style>
