@@ -199,14 +199,18 @@ st.markdown("""
     /* スマホ表示の時だけ、サイドバーを強制的に閉じる */
     @media (max-width: 768px) {
         /* 
-         * Streamlitはページ遷移後もサイドバーの表示状態を記憶してしまうため、
-         * ページ読み込み時にサイドバーが開いている状態(expanded)の場合に限り、
-         * 強制的に閉じる(collapsed)状態のスタイルを適用する。
-         * これにより、スマホでは常に閉じた状態から始まるように見え、開閉ボタンは常に表示される。
+         * Streamlitはページ遷移後もサイドバーの表示状態を記憶してしまう。
+         * これにより、スマホでページ遷移をするとメニューがコンテンツに覆いかぶさってしまう。
+         * 以下のCSSは、ページ読み込み時にサイドバーが開いている状態(expanded)の場合に限り、
+         * サイドバー本体と、背景のオーバーレイを強制的に非表示にする。
+         * これで、ページ遷移後は常にメニューが閉じた状態から始まるようになる。
          */
         body[data-sidebar-state="expanded"] section[data-testid="stSidebar"] > div:first-child {
             transform: translateX(-100%);
-            transition: transform 300ms ease-in-out;
+            transition: transform 300ms ease-in-out 0s;
+        }
+        body[data-sidebar-state="expanded"] div[data-testid="stSidebar"] {
+            background-color: transparent;
         }
     }
 </style>
