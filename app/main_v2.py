@@ -13,7 +13,11 @@ try:
     from capture_lp import extract_lp_text_content
 except ImportError:
     extract_lp_text_content = None
-import time # ファイルの先頭でインポート
+import time
+import json
+from google.cloud import bigquery
+from google.oauth2 import service_account
+import google.generativeai as genai
 # scipyをインポート（A/Bテストの有意差検定で使用）
 
 # ページ設定
@@ -230,11 +234,40 @@ def safe_rate(numerator, denominator):
 # データ読み込み
 @st.cache_data
 def load_data():
-    """ダミーデータを読み込む"""
-    df = pd.read_csv("app/dummy_data.csv")
-    df['event_timestamp'] = pd.to_datetime(df['event_timestamp'])
-    df['event_date'] = pd.to_datetime(df['event_date'])
-    return df
+    """BigQueryからデータを読み込む。Secretsに情報がない場合はダミーデータを読み込む。"""
+    try:
+        # StreamlitのSecretsから認証情報を取得
+        gcp_service_account_str = st.secrets["GCP_SERVICE_ACCOUNT_JSON"]
+        credentials_info = json.loads(gcp_service_account_str)
+        credentials = service_account.Credentials.from_service_account_info(credentials_info)
+        project_id = credentials.project_id
+
+        # BigQueryクライアントを初期化
+        client = bigquery.Client(credentials=credentials, project=project_id)
+
+        # TODO: あなたの環境に合わせてBigQueryのテーブル名を指定してください
+        # 例: `your_project_id.your_dataset.your_table`
+        # ここではプロジェクトIDを動的に取得し、データセットとテーブル名はプレースホルダーにしています。
+        table_name = f"{project_id}.shungene_dataset.swipelp_events"
+
+        # SQLクエリを作成
+        query = f"SELECT * FROM `{table_name}`"
+
+        # クエリを実行してDataFrameに読み込む
+        df = client.query(query).to_dataframe()
+
+        # タイムスタンプと日付の列をdatetime型に変換
+        df['event_timestamp'] = pd.to_datetime(df['event_timestamp'])
+        df['event_date'] = pd.to_datetime(df['event_date'])
+        st.toast("BigQueryからデータを正常に読み込みました。", icon="✅")
+        return df
+
+    except Exception as e:
+        st.warning("BigQueryの認証情報が正しく設定されていないか、テーブルが存在しません。代わりにダミーデータを表示します。")
+        df = pd.read_csv("app/dummy_data.csv")
+        df['event_timestamp'] = pd.to_datetime(df['event_timestamp'])
+        df['event_date'] = pd.to_datetime(df['event_date'])
+        return df
 
 # 比較期間のデータを取得する関数
 def get_comparison_data(df, current_start, current_end, comparison_type):
@@ -269,6 +302,32 @@ def safe_extract_lp_text_content(extractor_func, url):
     else:
         # モジュールがない場合のデフォルトの戻り値
         return {"headlines": [], "body_copy": [], "ctas": []}
+
+# --- AI分析関数 ---
+@st.cache_data(show_spinner=False) # スピナーは関数内で制御
+def generate_ai_insight(prompt, context_data=""):
+    """Gemini APIを呼び出して分析結果を生成する"""
+    try:
+        api_key = st.secrets["GOOGLE_API_KEY"]
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-pro')
+        
+        full_prompt = f"""
+        あなたは優秀なWebアナリストです。以下のデータとコンテキストを基に、プロの視点から現状の評価と具体的な改善提案をしてください。
+        出力はStreamlitのMarkdown形式で、箇条書きや太字を効果的に使用して分かりやすくまとめてください。
+
+        ---
+        ### コンテキストデータ
+        {context_data}
+        ---
+        ### 指示
+        {prompt}
+        """
+        
+        response = model.generate_content(full_prompt)
+        return response.text
+    except Exception as e:
+        return f"AI分析の実行中にエラーが発生しました。APIキーが正しく設定されているか確認してください。エラー: {e}"
 
 
 # データ読み込み
@@ -1208,30 +1267,27 @@ if selected_analysis == "全体サマリー":
         st.session_state.summary_ai_open = True
 
     if st.session_state.summary_ai_open:
-        with st.container():
-            with st.spinner("AIが全体データを分析中..."):
-                evaluation_text = f"""
-                現在のLPパフォーマンスを総合的に評価します。
-                - **強み**: 平均滞在時間({avg_stay_time:.1f}秒)や最終CTA到達率({final_cta_rate:.1f}%)は比較的良好で、一度興味を持ったユーザーはコンテンツを読み進める傾向にあります。
-                - **弱み**: コンバージョン率({conversion_rate:.2f}%)とFV残存率({fv_retention_rate:.1f}%)が課題です。特に、多くのユーザーが最初のページ（ファーストビュー）で離脱している可能性が高いです。
-                """
-                st.info(evaluation_text)
+        with st.spinner("AIが全体データを分析中..."):
+            context_data = f"""
+            - 期間: {start_date} ～ {end_date}
+            - 対象LP: {selected_lp}
+            - セッション数: {total_sessions}
+            - コンバージョン数: {total_conversions}
+            - コンバージョン率: {conversion_rate:.2f}%
+            - FV残存率: {fv_retention_rate:.1f}%
+            - 最終CTA到達率: {final_cta_rate:.1f}%
+            - 平均滞在時間: {avg_stay_time:.1f}秒
+            """
+            prompt = """
+            上記の主要指標を基に、このLPのパフォーマンスを総合的に評価してください。
+            1. 「現状の評価」として、特に注目すべき「強み」と「弱み」を箇条書きで指摘してください。
+            2. 「今後の考察と改善案」として、最も優先して取り組むべき課題を1つ特定し、その理由と具体的な改善アクションを3つ提案してください。
+            """
+            ai_response = generate_ai_insight(prompt, context_data)
+            st.markdown(ai_response)
 
-                recommendation_text = """
-                **最優先課題は「ファーストビューの改善」です。**
-                多くのユーザーが最初の接点で離脱しているため、ここを改善することが全体のパフォーマンス向上に最も効果的です。
-                
-                **具体的な改善アクション案:**
-                1. **キャッチコピーの見直し**: ターゲットに響く、より強力なメッセージに変更する。
-                2. **メインビジュアルの変更**: ユーザーの興味を引く画像や動画に差し替える。
-                3. **A/Bテストの実施**: 上記の要素で複数のパターンを用意し、「A/Bテスト分析」機能で効果を検証する。
-                
-                次に、「ページ分析」機能を用いて、ファーストビュー以降で離脱率が特に高い「ボトルネックページ」を特定し、改善を進めましょう。
-                """
-                st.warning(recommendation_text)
-
-            if st.button("AI分析を閉じる", key="summary_ai_close"):
-                st.session_state.summary_ai_open = False
+        if st.button("AI分析を閉じる", key="summary_ai_close"):
+            st.session_state.summary_ai_open = False
 
     # --- よくある質問 ---
     st.markdown("#### このページの分析について質問する")
@@ -1712,33 +1768,29 @@ elif selected_analysis == "ページ分析":
         st.session_state.page_analysis_ai_open = True
 
     if st.session_state.page_analysis_ai_open:
-        with st.container():
-            with st.spinner("AIがページデータを分析中..."):
-                bottleneck_page = page_stats.sort_values(by=['離脱率', '平均滞在時間(秒)'], ascending=[False, True]).iloc[0]
-                
-                st.markdown("#### 1. 現状の評価")
-                st.info(f"""
-                ポジショニングマップと各指標から、**ページ{int(bottleneck_page['ページ番号'])}** が最も重要な改善候補（ボトルネック）であると判断されます。
-                - **離脱率**: {bottleneck_page['離脱率']:.1f}% と高く、多くのユーザーがここでLPから離れています。
-                - **平均滞在時間**: {bottleneck_page['平均滞在時間(秒)']:.1f}秒 と短く、コンテンツが十分に読まれていない可能性があります。
-                - **逆行パターン**: 逆行が多いページは、ユーザーが情報を探して迷っている兆候です。遷移元と遷移先のコンテンツの流れを見直す必要があります。
-                """)
+        with st.spinner("AIがページデータを分析中..."):
+            context_data = f"""
+            - 期間: {start_date} ～ {end_date}
+            - 対象LP: {selected_lp}
+            - ページ別統計データ:
+            {page_stats.to_markdown(index=False)}
+            """
+            prompt = """
+            あなたはプロのLPOコンサルタントです。上記のページ別統計データを基に、以下の構成で分析と提案を行ってください。
 
-                st.markdown("#### 2. 今後の考察と改善案")
-                st.warning(f"""
-                **ページ{int(bottleneck_page['ページ番号'])}** の改善が急務です。滞在時間が短く離脱率が高いことから、以下の可能性が考えられます。
-                - **コンテンツのミスマッチ**: 前のページからの期待と、このページの内容が合っていない。
-                - **魅力の欠如**: ユーザーの興味を引く情報やビジュアルが不足している。
-                - **次のアクションが不明確**: ユーザーが次に何をすべきか分からず離脱している。
-                
-                **具体的な改善アクション案:**
-                1. **コンテンツの見直し**: ページ{int(bottleneck_page['ページ番号'])}のキャッチコピーや画像が、ユーザーのニーズに合っているか再確認する。
-                2. **CTAの設置**: 次のページへ誘導する明確なCTA（コールトゥアクション）ボタンを設置、または既存のものをより目立たせる。
-                3. **A/Bテストの実施**: 異なる訴求内容のコンテンツやデザインでA/Bテストを行い、どちらが効果的か検証する。
-                """)
+            ### 1. 現状の評価
+            - ポジショニングマップ（離脱率と滞在時間）の観点から、最も重要な改善候補となる「ボトルネックページ」を1つ特定してください。
+            - そのページの「離脱率」と「平均滞在時間」を引用し、なぜそれがボトルネックだと判断したのかを説明してください。
 
-            if st.button("AI分析を閉じる", key="page_analysis_ai_close"):
-                st.session_state.page_analysis_ai_open = False
+            ### 2. 今後の考察と改善案
+            - 特定したボトルネックページについて、ユーザーが離脱する原因として考えられる仮説を3つ挙げてください。
+            - それぞれの仮説に対して、具体的な改善アクション案を提案してください。
+            """
+            ai_response = generate_ai_insight(prompt, context_data)
+            st.markdown(ai_response)
+
+        if st.button("AI分析を閉じる", key="page_analysis_ai_close"):
+            st.session_state.page_analysis_ai_open = False
 
     # --- よくある質問 ---
     st.markdown("#### このページの分析について質問する")
@@ -2002,35 +2054,30 @@ elif selected_analysis == "広告分析":
         st.session_state.ad_analysis_ai_open = True
 
     if st.session_state.ad_analysis_ai_open:
-        with st.container():
-            with st.spinner("AIがセグメントデータを分析中..."):
-                if not segment_stats.empty and 'CVR' in segment_stats.columns:
-                    best_segment_row = segment_stats.loc[segment_stats['CVR'].idxmax()]
-                    worst_segment_row = segment_stats.loc[segment_stats['CVR'].idxmin()]
-                    best_segment = {'name': best_segment_row[segment_name], 'cvr': best_segment_row['CVR']}
-                    worst_segment = {'name': worst_segment_row[segment_name], 'cvr': worst_segment_row['CVR']}
-                else:
-                    best_segment, worst_segment = (None, None)
-                
-                st.markdown("#### 1. 現状の評価")
-                st.info(f"""
-                {analysis_target}では、パフォーマンスに顕著な差が見られます。
-                - **最もパフォーマンスが高いセグメント**: **{best_segment['name']}** (CVR: {best_segment['cvr']:.2f}%)
-                - **最もパフォーマンスが低いセグメント**: **{worst_segment['name']}** (CVR: {worst_segment['cvr']:.2f}%) # type: ignore
-                
-                特に **{worst_segment['name']}** のセグメントは、他のセグメントと比較してCVRが低く、改善の機会が大きい領域です。 # type: ignore
-                """)
+        with st.spinner("AIが広告データを分析中..."):
+            context_data = f"""
+            - 分析軸: {analysis_target}
+            - 期間: {start_date} ～ {end_date}
+            - 対象LP: {selected_lp}
+            - パフォーマンスデータ:
+            {segment_stats.to_markdown(index=False)}
+            """
+            prompt = """
+            あなたは広告運用の専門家です。上記の広告パフォーマンスデータを基に、以下の構成で分析と提案を行ってください。
 
-                st.markdown("#### 2. 今後の考察と改善案")
-                st.warning(f"""
-                **{worst_segment['name']}** セグメントのパフォーマンスが低い原因を特定し、対策を講じるべきです。 # type: ignore
-                - **{analysis_target}が「デバイス別」の場合**: {worst_segment['name']}での表示崩れや操作性の問題がないか確認が必要です。レスポンシブデザインの見直しや、読み込み速度の最適化を検討してください。
-                - **{analysis_target}が「チャネル別」の場合**: {worst_segment['name']}からの流入ユーザーとLPの訴求内容が一致していない可能性があります。広告のターゲティングやクリエイティブ、またはLPのファーストビューを見直してください。
-                
-                逆に、**{best_segment['name']}** は非常に効果的なセグメントです。このセグメントへの広告予算の増額や、類似ユーザーへのアプローチ拡大を検討する価値があります。
-                """)
-            if st.button("AI分析を閉じる", key="ad_analysis_ai_close"):
-                st.session_state.ad_analysis_ai_open = False
+            ### 1. 現状の評価
+            - CVRを基準に、「最もパフォーマンスが高いセグメント」と「最もパフォーマンスが低いセグメント」を特定し、それぞれのCVRを引用してください。
+            - パフォーマンスが低いセグメントが、なぜ改善の機会が大きいと言えるのかを説明してください。
+
+            ### 2. 今後の考察と改善案
+            - パフォーマンスが低いセグメントについて、考えられる原因を考察してください。
+            - パフォーマンスが高いセグメントの予算を増やすなど、具体的なアクションを提案してください。
+            """
+            ai_response = generate_ai_insight(prompt, context_data)
+            st.markdown(ai_response)
+
+        if st.button("AI分析を閉じる", key="ad_analysis_ai_close"):
+            st.session_state.ad_analysis_ai_open = False
 
     # --- よくある質問 ---
     st.markdown("#### このページの分析について質問する")
@@ -2451,36 +2498,32 @@ elif selected_analysis == "A/Bテスト分析":
         st.session_state.ab_test_ai_open = True
 
     if st.session_state.ab_test_ai_open:
-        with st.container():
-            with st.spinner("AIがA/Bテスト結果を分析中..."):
-                if not ab_stats.empty and len(ab_stats) >= 2:
-                    winner = ab_stats.sort_values('コンバージョン率', ascending=False).iloc[0]
-                    baseline = ab_stats.iloc[0]
-                    
-                    st.markdown("#### 1. テスト結果の評価")
-                    st.info(f"""
-                    今回のA/Bテストの結果、**「{winner['バリアント']}」** が最も高いパフォーマンスを示しました。
-                    - **勝者**: {winner['バリアント']} (CVR: {winner['コンバージョン率']:.2f}%)
-                    - **ベースライン**: {baseline['バリアント']} (CVR: {baseline['コンバージョン率']:.2f}%)
-                    - **CVR差分**: {winner['CVR差分(pt)']:.2f}pt
-                    - **統計的有意差**: {winner['有意差']} (p値: {winner['p値']:.4f})
-                    
-                    p値が0.05未満の場合、この結果が偶然である可能性は低く、信頼性が高いと判断できます。
-                    """)
+        with st.spinner("AIがA/Bテスト結果を分析中..."):
+            context_data = f"""
+            - 期間: {start_date} ～ {end_date}
+            - 対象LP: {selected_lp}
+            - A/Bテスト結果データ:
+            {ab_stats.to_markdown(index=False)}
+            """
+            prompt = """
+            あなたはデータサイエンティストです。上記のA/Bテスト結果データを基に、以下の構成で分析と提案を行ってください。
 
-                    st.markdown("#### 2. 今後のアクション提案")
-                    st.warning(f"""
-                    **「{winner['バリアント']}」** のパターンを本採用することを強く推奨します。
-                    
-                    **次のステップ:**
-                    1. **勝者パターンの実装**: エンジニアリングチームと連携し、勝者パターン「{winner['バリアント']}」を全てのユーザーに適用してください。
-                    2. **効果測定**: 実装後、再度パフォーマンスをモニタリングし、期待通りの効果が出ているか確認します。
-                    3. **次のテスト計画**: 今回のテストで得られた知見（例：「{winner['バリアント']}」のどの要素が良かったか）を基に、さらなる改善のための新しいA/Bテストを計画しましょう。
-                    """)
-                else:
-                    st.warning("比較するバリアントが2つ未満のため、詳細な分析は実行できません。")
-            if st.button("AI分析を閉じる", key="ab_test_ai_close"):
-                st.session_state.ab_test_ai_open = False
+            ### 1. テスト結果の評価
+            - CVRが最も高かった「勝者」バリアントを特定してください。
+            - ベースライン（バリアントA）と比較した際の「CVR差分」と「p値」を引用し、その結果が統計的に信頼できるかどうかを「p値が0.05未満かどうか」という基準で評価してください。
+
+            ### 2. 今後のアクション提案
+            - 分析結果に基づき、勝者パターンを本採用すべきか、それともテストを継続すべきかを明確に推奨してください。
+            - 次に取るべき具体的なステップを「勝者パターンの実装」「効果測定」「次のテスト計画」の3つの観点から提案してください。
+            """
+            if not ab_stats.empty and len(ab_stats) >= 2:
+                ai_response = generate_ai_insight(prompt, context_data)
+                st.markdown(ai_response)
+            else:
+                st.warning("比較するバリアントが2つ未満のため、詳細な分析は実行できません。")
+
+        if st.button("AI分析を閉じる", key="ab_test_ai_close"):
+            st.session_state.ab_test_ai_open = False
 
     # --- よくある質問 ---
     st.markdown("#### このページの分析について質問する")
@@ -2857,31 +2900,29 @@ elif selected_analysis == "インタラクション分析":
         st.session_state.interaction_ai_open = True
 
     if st.session_state.interaction_ai_open:
-        with st.container():
-            with st.spinner("AIがインタラクションデータを分析中..."):
-                # クリック率が最も高い要素を特定
-                if not contribution_df.empty:
-                    best_lift_element = contribution_df.loc[contribution_df['CVRリフト率 (%)'].idxmax()]
-                else:
-                    best_lift_element = pd.Series({'インタラクション要素': 'N/A', 'CVRリフト率 (%)': 0})
-                
-                st.markdown("#### 1. 現状の評価")
-                st.info(f"""
-                インタラクション要素の中で、**「{best_lift_element['インタラクション要素']}」** がCVRリフト率 **{best_lift_element['CVRリフト率 (%)']:.1f}%** と最も高く、コンバージョンに最も貢献している行動と考えられます。
-                
-                この行動を取ったユーザーは、取らなかったユーザーに比べてCVRが大幅に高いことを意味します。
-                """)
+        with st.spinner("AIがインタラクションデータを分析中..."):
+            context_data = f"""
+            - 期間: {start_date} ～ {end_date}
+            - 対象LP: {selected_lp}
+            - インタラクション別CV貢献度データ:
+            {contribution_df.to_markdown(index=False)}
+            """
+            prompt = """
+            あなたはUI/UXの専門家です。上記のインタラクション別CV貢献度データを基に、以下の構成で分析と提案を行ってください。
 
-                st.markdown("#### 2. 今後の考察と改善案")
-                st.warning(f"""
-                **CV貢献度の高い行動を促進する:**
-                「{best_lift_element['インタラクション要素']}」という行動を、より多くのユーザーに取ってもらうための施策が有効です。例えば、このボタンをより目立たせる、配置を変える、などの改善が考えられます。
-                
-                **CV貢献度の低い行動の分析:**
-                CVRリフト率が低い、あるいはマイナスになっている行動は、ユーザーを混乱させているか、CVから遠ざけている可能性があります。その要素の必要性自体を見直すか、役割を明確にする改善が必要です。
-                """)
-            if st.button("AI分析を閉じる", key="interaction_ai_close"):
-                st.session_state.interaction_ai_open = False
+            ### 1. 現状の評価
+            - 「CVRリフト率」が最も高いインタラクション要素を特定し、それがコンバージョンに最も貢献している行動であると評価してください。
+            - その行動を取ったユーザーと取らなかったユーザーのCVRを比較し、その差がどれほど大きいかを具体的に示してください。
+
+            ### 2. 今後の考察と改善案
+            - CV貢献度の高い行動を、より多くのユーザーに取ってもらうための具体的な施策を提案してください。（例：ボタンを目立たせる、配置を変えるなど）
+            - 逆に、CVRリフト率が低い、またはマイナスになっている行動があれば、それがユーザーを混乱させている可能性を指摘し、その要素の必要性を見直すか、役割を明確にする改善を提案してください。
+            """
+            ai_response = generate_ai_insight(prompt, context_data)
+            st.markdown(ai_response)
+
+        if st.button("AI分析を閉じる", key="interaction_ai_close"):
+            st.session_state.interaction_ai_open = False
 
     # --- よくある質問 ---
     st.markdown("#### このページの分析について質問する")
@@ -3517,32 +3558,29 @@ elif selected_analysis == "時系列分析":
         st.session_state.timeseries_ai_open = True
 
     if st.session_state.timeseries_ai_open:
-        with st.container():
-            with st.spinner("AIが時系列データを分析中..."):
-                if not heatmap_stats.empty:
-                    # ゴールデンタイムを特定
-                    golden_time = heatmap_stats.loc[heatmap_stats['コンバージョン率'].idxmax()]
-                else:
-                    golden_time = None
-                
-                st.markdown("#### 1. 現状の評価")
-                st.info(f"""
-                曜日・時間帯別のヒートマップから、このLPの「ゴールデンタイム」が明らかになりました。
-                - **最もCVRが高い時間帯**: **{dow_map_jp[golden_time['dow_name']]}曜日の{int(golden_time['hour'])}時台** (CVR: {golden_time['コンバージョン率']:.2f}%)
-                
-                この時間帯は、ターゲットユーザーが最もアクティブで、コンバージョンに至りやすいと考えられます。
-                """)
+        with st.spinner("AIが時系列データを分析中..."):
+            context_data = f"""
+            - 期間: {start_date} ～ {end_date}
+            - 対象LP: {selected_lp}
+            - 曜日・時間帯別CVRヒートマップデータ:
+            {heatmap_stats.to_markdown(index=False) if 'heatmap_stats' in locals() and not heatmap_stats.empty else 'データなし'}
+            """
+            prompt = """
+            あなたはデータアナリストです。上記の曜日・時間帯別CVRヒートマップデータを基に、以下の構成で分析と提案を行ってください。
 
-                st.markdown("#### 2. 今後の考察と改善案")
-                st.warning(f"""
-                **ゴールデンタイムの活用:**
-                - **広告配信の強化**: {dow_map_jp[golden_time['dow_name']]}曜日の{int(golden_time['hour'])}時台を中心に、広告の表示を強化したり、入札単価を引き上げることで、効率的にコンバージョンを獲得できる可能性があります。
-                - **プロモーションの実施**: メールマガジンの配信やSNSでの投稿をこの時間帯に合わせることで、開封率やクリック率の向上が期待できます。
-                
-                逆に、CVRが低い時間帯は広告配信を抑制することで、広告費の無駄遣いを防ぎ、全体のCPAを改善することができます。
-                """)
-            if st.button("AI分析を閉じる", key="timeseries_ai_close"):
-                st.session_state.timeseries_ai_open = False
+            ### 1. 現状の評価
+            - ヒートマップから、CVRが最も高い「ゴールデンタイム」（曜日と時間帯）を特定し、その時間帯のCVRを引用してください。
+            - この時間帯がなぜ重要なのかを説明してください。
+
+            ### 2. 今後の考察と改善案
+            - 特定した「ゴールデンタイム」をどのように活用すべきか、具体的なアクションを「広告配信」と「プロモーション」の2つの観点から提案してください。
+            - 逆に、CVRが低い時間帯に対してどのようなアクションを取るべきかについても言及してください。
+            """
+            ai_response = generate_ai_insight(prompt, context_data)
+            st.markdown(ai_response)
+
+        if st.button("AI分析を閉じる", key="timeseries_ai_close"):
+            st.session_state.timeseries_ai_open = False
 
     # --- よくある質問 ---
     st.markdown("#### このページの分析について質問する")
@@ -3633,22 +3671,21 @@ elif selected_analysis == "リアルタイムビュー":
         st.session_state.realtime_ai_open = True
 
     if st.session_state.realtime_ai_open:
-        with st.container():
-            with st.spinner("AIがリアルタイムデータを分析中..."):
-                st.markdown("#### 1. 現状の評価")
-                st.info("""
-                リアルタイムビューでは、直近1時間のサイト活動を監視しています。セッション数が通常時と比較して急増または急減していないかを確認することが重要です。
-                - **セッション数の急増**: メディア掲載やインフルエンサーによる紹介など、外部からの突発的な流入の可能性があります。
-                - **セッション数の急減**: サイトの障害や広告配信の停止など、何らかの問題が発生している可能性があります。
-                """)
+        with st.spinner("AIがリアルタイムデータを分析中..."):
+            context_data = f"""
+            - 直近1時間のセッション数: {rt_sessions if 'rt_sessions' in locals() else 'N/A'}
+            - 直近1時間のセッション推移: {rt_trend.to_markdown(index=False) if 'rt_trend' in locals() and not rt_trend.empty else 'データなし'}
+            """
+            prompt = """
+            あなたはサイトの監視担当者です。上記のリアルタイムデータを基に、以下の構成でユーザーへの報告を行ってください。
+            1. **現状の評価**: リアルタイムビューの目的を説明し、「セッション数の急増」と「セッション数の急減」がそれぞれ何を意味する可能性があるかを解説してください。
+            2. **今後のアクション**: 上記の「機会の活用」と「問題の早期発見」の2つのシナリオについて、それぞれどのような具体的なアクションを取るべきかを提案してください。
+            """
+            ai_response = generate_ai_insight(prompt, context_data)
+            st.markdown(ai_response)
 
-                st.markdown("#### 2. 今後のアクション")
-                st.warning("""
-                - **機会の活用**: セッション数が急増している場合、その原因を特定し、SNSで言及を広めたり、関連コンテンツをトップに表示するなどして、機会を最大化しましょう。
-                - **問題の早期発見**: セッション数がゼロに近い、または急減している場合は、サイトが正常に表示されるか、広告キャンペーンが正しく配信されているかを直ちに確認してください。
-                """)
-            if st.button("AI分析を閉じる", key="realtime_ai_close"):
-                st.session_state.realtime_ai_open = False
+        if st.button("AI分析を閉じる", key="realtime_ai_close"):
+            st.session_state.realtime_ai_open = False
 
     # --- よくある質問 ---
     st.markdown("#### このページの分析について質問する")
@@ -4343,242 +4380,51 @@ elif selected_analysis == "AIによる分析・考察":
         st.session_state.ai_analysis_open = True
 
     if st.session_state.ai_analysis_open:
-        with st.container():
-            # LPのURLからテキストコンテンツを抽出
-            lp_text_content = safe_extract_lp_text_content(extract_lp_text_content, selected_lp)
-            main_headline = lp_text_content['headlines'][0] if lp_text_content['headlines'] else "（ヘッドライン取得不可）"
-            # f-string内でエラーを起こさないようにトリプルクォートを別の文字に置換
-            main_headline_escaped = main_headline.replace('"""', "'''")
-            # ユーザー入力も同様に置換
-            target_customer_escaped = target_customer.replace('"""', "'''") # type: ignore
+        with st.spinner("AIがあなたのために包括的な分析レポートを作成中..."):
+            # AIに渡すためのコンテキストデータを準備
+            context_data = f"""
+            ### ユーザーからの入力情報
+            - 目標CVR: {target_cvr or '未設定'}%
+            - 目標CV数(月間): {target_cv or '未設定'}
+            - 目標CPA: {target_cpa or '未設定'}円
+            - 現状CVR: {current_cvr or '未設定'}%
+            - 現状CV数: {current_cv or '未設定'}
+            - 現状CPA: {current_cpa or '未設定'}円
+            - ターゲット顧客: {target_customer or '未設定'}
+            - その他の重視点: {other_info or '未設定'}
 
-            # AI分析に必要なデータをここで計算
-            # ページ別統計
-            page_stats = filtered_df.groupby('max_page_reached').agg(
-                離脱セッション数=('session_id', 'nunique'),
-                平均滞在時間_ms=('stay_ms', 'mean')
-            ).reset_index()
-            page_stats['離脱率'] = (page_stats['離脱セッション数'] / total_sessions * 100) if total_sessions > 0 else 0
-            page_stats.rename(columns={'max_page_reached': 'ページ番号'}, inplace=True)
-            max_exit_page = page_stats.loc[page_stats['離脱率'].idxmax()] if not page_stats.empty else {'ページ番号': 'N/A', '離脱率': 0}
+            ### システムによる分析データ
+            - 分析期間: {start_date} ～ {end_date}
+            - 対象LP: {selected_lp}
+            - 全体CVR: {conversion_rate:.2f}%
+            - 全体セッション数: {total_sessions}
+            - 全体CV数: {total_conversions}
+            - FV残存率: {fv_retention_rate:.1f}%
+            - 最終CTA到達率: {final_cta_rate:.1f}%
+            - 平均滞在時間: {avg_stay_time:.1f}秒
+            - LPコンテンツのヘッドライン: {lp_text_content['headlines'][0] if lp_text_content['headlines'] else '取得不可'}
+            """
+            prompt = """
+            あなたは世界トップクラスのLPOコンサルタントです。上記の「ユーザーからの入力情報」と「システムによる分析データ」を統合し、以下の3つのセクションから成る詳細な分析レポートを作成してください。
 
-            # デバイス別統計（修正）
-            device_stats = filtered_df.groupby('device_type').agg(
-                セッション数=('session_id', 'nunique'),
-                コンバージョン数=('cv_type', lambda x: x.notna().sum())
-            ).reset_index().rename(columns={'device_type': 'デバイス'})
-            if not device_stats.empty:
-                device_stats['コンバージョン率'] = (device_stats['コンバージョン数'] / device_stats['セッション数'] * 100).fillna(0)
-                worst_device = device_stats.loc[device_stats['コンバージョン率'].idxmin()]
-            else:
-                worst_device = {'デバイス': 'N/A', 'コンバージョン率': 0}
+            ### 1. 客観的かつ詳細な現状分析
+            - **総合評価**: ユーザー入力の目標値と現状値を比較し、目標達成状況を評価してください。
+            - **AIによるLPコンテンツの評価**: LPのヘッドラインとターゲット顧客の情報を基に、メッセージングの妥当性を評価してください。
 
-            # チャネル別統計（修正）
-            channel_stats = filtered_df.groupby('channel').agg(
-                セッション数=('session_id', 'nunique'),
-                コンバージョン数=('cv_type', lambda x: x.notna().sum())
-            ).reset_index().rename(columns={'channel': 'チャネル'})
-            if not channel_stats.empty:
-                channel_stats['コンバージョン率'] = channel_stats.apply(lambda row: safe_rate(row['コンバージョン数'], row['セッション数']) * 100, axis=1)
+            ### 2. 現状分析からの今後の考察
+            - **トレンド予測と潜在的リスク**: データから読み取れる最大の課題（例：FV残存率の低さ）と、それが将来的にどのようなリスクに繋がるかを考察してください。また、改善の機会（ポテンシャル）についても言及してください。
 
-            best_channel = channel_stats.loc[channel_stats['コンバージョン率'].idxmax()] if not channel_stats.empty else {'チャネル': 'N/A'}
-            worst_channel = channel_stats.loc[channel_stats['コンバージョン率'].idxmin()] if not channel_stats.empty else {'チャネル': 'N/A'}
-            
-            # AIによる訴求ポイントの推察（簡易版）
-            # 本来はLLMで要約するが、ここではキーワードで代用
-            body_text = " ".join(lp_text_content['body_copy'])
-            keywords = ["限定", "割引", "無料", "簡単", "満足度"]
-            found_keywords = [kw for kw in keywords if kw in body_text]
-            if found_keywords:
-                inferred_appeal_point = f"LPのテキストから「{', '.join(found_keywords)}」というキーワードが検出されました。これらが主要な訴求ポイントと推察されます。"
-            else:
-                inferred_appeal_point = "LPのテキストから主要な訴求ポイントを自動推察します。（現在はキーワード検出のみ）"
-            inferred_appeal_point_escaped = inferred_appeal_point.replace('"""', "'''")
-            
-            # 分析期間の日数を計算
-            analysis_days = (pd.to_datetime(end_date) - pd.to_datetime(start_date)).days + 1
-            
-            # 月間目標を日割り計算
-            daily_target_cv = (target_cv / 30) * analysis_days if target_cv is not None and target_cv > 0 else 0
-            daily_target_cvr = target_cvr if target_cvr is not None else 0 # CVRは期間によらないのでそのまま
-            daily_target_cpa = target_cpa if target_cpa is not None else 0 # CPAも期間によらないのでそのまま
+            ### 3. 具体的な改善提案
+            - **優先度別の施策**: 「優先度高：即実施すべき施策」「優先度中：A/Bテストで検証すべき施策」「優先度低：中長期的な施策」の3段階に分けて、具体的な改善アクションを複数提案してください。
+            - **実施ロードマップ**: 提案した施策を3ヶ月間のタイムラインに落とし込み、期待される効果も記述してください。
+            """
+            ai_response = generate_ai_insight(prompt, context_data)
+            st.markdown(ai_response)
 
-            # セクション1: 客観的かつ詳細な現状分析
-            st.markdown("---")
-            st.markdown("### 1. 客観的かつ詳細な現状分析")
-            
-            with st.expander("全体パフォーマンス評価", expanded=True):
-                st.markdown(f"""
-                **総合評価:**  
-                - **現状のCVR**: **{current_cvr or 0:.2f}%** （期間目標: {daily_target_cvr if daily_target_cvr > 0 else '未設定'}%）
-                - **現状のCV数**: **{current_cv or 0}** （期間目標: {daily_target_cv:.0f}件）
-                - **ファーストビュー(FV)残存率**: **{fv_retention_rate:.1f}%** が最初のページで離脱せずに次に進んでいます。
-                - **最終CTA到達率**: **{final_cta_rate:.1f}%** が最終ページまで到達しています。
-                
-                **AIによるLPコンテンツの評価:**
-                - **ヘッドライン**: 「{main_headline_escaped}」
-                - **訴求ポイント(AI推察)**: {inferred_appeal_point_escaped}
-                - **ターゲット顧客との関連性**: {f"入力されたターゲット顧客「{target_customer_escaped}」に対して、現在のヘッドラインと訴求ポイントは関連性が高いと考えられます。" if target_customer_escaped else "ターゲット顧客が未入力のため、詳細な関連性分析はスキップします。"}
-                """)
-            
-            # セクション2: 現状分析からの今後の考察
-            st.markdown("---")
-            st.markdown("### 2. 現状分析からの今後の考察")
-            
-            with st.expander("トレンド予測と潜在的リスク", expanded=True):
-                st.markdown(f"""
-                **考察:**
-                - **目標達成状況**: 現状のCV数({current_cv or 0}件)は、分析期間({analysis_days}日間)における日割り目標({daily_target_cv:.0f}件)に対して **{(current_cv or 0) - daily_target_cv:.0f}件** の差があります。
-                - **最大の課題**: FV残存率が **{fv_retention_rate:.1f}%** と低いことが、全体のCVRを押し下げる最大の要因と考えられます。多くのユーザーがLPの第一印象で興味を失い、離脱している可能性があります。
-                - **機会**: 最終CTA到達率が **{final_cta_rate:.1f}%** あるため、LPの中盤以降のコンテンツは比較的読まれているようです。FVを突破したユーザーを確実にCVに繋げることができれば、パフォーマンスは大きく改善する可能性があります。
-                """)
-            
-            # セクション3: 改善提案
-            st.markdown("---")
-            st.markdown("### 3. 具体的な改善提案")
-            
-            with st.expander("優先度高: 即実施すべき施策", expanded=True):
-                st.markdown(f"""
-                **1. ボトルネックページの改善（ページ{int(max_exit_page['ページ番号'])}）**
-                
-                - **実施内容**:
-                  - コンテンツの簡素化と視覚的な改善
-                  - 読みやすさの向上（フォントサイズ、行間、余白）
-                  - 画像・動画の最適化（読込時間短縮）
-                  - CTAボタンの追加または強調
-                
-                - **期待効果**: 離脱率{max_exit_page['離脱率']:.1f}% → {max_exit_page['離脱率'] * 0.7:.1f}% (30%減)
-                - **実施期間**: 1-2週間
-                - **必要リソース**: デザイナー1名、エンジニア1名
-                
-                **2. {worst_device['デバイス']}最適化**
-                
-                - **実施内容**:
-                  - レスポンシブデザインの見直し
-                  - タッチ操作の最適化（ボタンサイズ、間隔）
-                  - 読込速度の改善（画像圧縮、遅延読み込み）
-                  - フォーム入力の簡略化
-                
-                - **期待効果**: {worst_device['デバイス']}CVR {worst_device['コンバージョン率']:.2f}% → {worst_device['コンバージョン率'] * 1.3:.2f}% (30%向上)
-                - **実施期間**: 2-3週間
-                - **必要リソース**: UI/UXデザイナー1名、エンジニア1名
-                
-                **3. ファーストビューの最適化**
-                
-                - **実施内容**:
-                  - キャッチコピーの改善（ベネフィットを明確に）
-                  - ヒーロー画像の変更（インパクトと関連性）
-                  - CTAボタンの最適化（色、サイズ、テキスト）
-                  - 信頼性要素の追加（実績、レビュー、ロゴ）
-                
-                - **期待効果**: FV残存率{fv_retention_rate:.1f}% → {fv_retention_rate * 1.15:.1f}% (15%向上)
-                - **実施期間**: 1週間
-                - **必要リソース**: コピーライター1名、デザイナー1名
-                """)
-            
-            with st.expander("優先度中: A/Bテストで検証すべき施策"):
-                st.markdown("""
-                **1. ファーストビューA/Bテスト**
-                
-                - **テスト内容**:
-                  - A: 現状のファーストビュー
-                  - B: ベネフィット強調型のファーストビュー
-                  - C: 社会的証明強調型のファーストビュー
-                
-                - **測定指標**: FV残存率、コンバージョン率
-                - **テスト期間**: 2-4週間
-                - **必要サンプルサイズ**: 各パターンあたり1,000セッション以上
-                
-                **2. CTAボタンA/Bテスト**
-                
-                - **テスト内容**:
-                  - A: 現状のCTAボタン
-                  - B: 色変更（アクセントカラー #002060 → オレンジ系）
-                  - C: テキスト変更（緊急性やベネフィットを強調）
-                
-                - **測定指標**: クリック率、コンバージョン率
-                - **テスト期間**: 1-2週間
-                
-                **3. フォーム長A/Bテスト**
-                
-                - **テスト内容**:
-                  - A: 現状のフォーム（入力項目数）
-                  - B: 簡略化フォーム（必須項目のみ）
-                  - C: 2ステップフォーム（段階的に情報収集）
-                
-                - **測定指標**: フォーム開始率、完了率、コンバージョン率
-                - **テスト期間**: 2-3週間
-                """)
-            
-            with st.expander("優先度低: 中長期的な施策"):
-                st.markdown(f"""
-                **1. パーソナライゼーションの導入**
-                
-                - **実施内容**:
-                  - デバイス別LPの出し分け
-                  - チャネル別メッセージの最適化
-                  - リピーターと新規ユーザーで異なるLPを表示
-                
-                - **期待効果**: 全体CVR 20-30%向上
-                - **実施期間**: 2-3ヶ月
-                - **必要リソース**: エンジニア2-3名、デザイナー1-2名
-                
-                **2. 動画コンテンツの強化**
-                
-                - **実施内容**:
-                  - 製品デモ動画の追加
-                  - 顧客事例インタビュー動画
-                  - アニメーションで複雑な概念を説明
-                
-                - **期待効果**: エンゲージメント向上、CVR 10-15%向上
-                - **実施期間**: 1-2ヶ月
-                - **必要リソース**: 動画クリエイター1-2名
-                
-                **3. リターゲティング戦略の構築**
-                
-                - **実施内容**:
-                  - 離脱ユーザーへのリターゲティング広告
-                  - カート放棄ユーザーへのメール送信
-                  - ページ途中離脱ユーザーへの特別オファー
-                
-                - **期待効果**: 全体コンバージョン数 15-25%増加
-                - **実施期間**: 1-2ヶ月
-                - **必要リソース**: マーケター1名、エンジニア1名
-                
-                **4. チャネル最適化と予算再配分**
-                
-                - **実施内容**:
-                  - {best_channel['チャネル']}への予算増額
-                  - {worst_channel['チャネル']}のターゲティング見直しまたは停止
-                  - 新規チャネルのテスト（リスク分散）
-                
-                - **期待効果**: ROI 20-30%向上
-                - **実施期間**: 継続的
-                - **必要リソース**: マーケティングマネージャー1名
-                """)
-            
-            with st.expander("実施ロードマップ（3ヶ月間）"):
-                st.markdown("""
-                | 時期 | 施策 | 目標KPI | 担当 |
-                |------|------|----------|------|
-                | 1週目 | ファーストビュー最適化 | FV残存率 +15% | デザインチーム |
-                | 2-3週目 | ボトルネックページ改善 | 離脱率 -30% | デザイン+開発 |
-                | 4-5週目 | デバイス最適化 | モバイルCVR +30% | 開発チーム |
-                | 6-8週目 | FVA/Bテスト | 全体CVR +10% | マーケティング |
-                | 9-10週目 | CTAA/Bテスト | クリック率 +15% | マーケティング |
-                | 11-12週目 | リターゲティング導入 | コンバージョン数 +20% | マーケティング |
-                
-                **期待される総合効果:**
-                - コンバージョン率: {conversion_rate:.2f}% → {conversion_rate * 1.5:.2f}% (50%向上)
-                - 月間コンバージョン数: 現在の1.5倍
-                - ROI: 20-30%向上
-                """)
-            
-            # 閉じるボタン
-            if st.button("AI分析を閉じる", key="ai_analysis_close"):
-                st.session_state.ai_analysis_open = False
+        if st.button("AI分析を閉じる", key="ai_analysis_close"):
+            st.session_state.ai_analysis_open = False
 
-            st.success("AI分析が完了しました！上記の提案を参考に、LPの改善を進めてください。")
+        st.success("AI分析が完了しました！上記の提案を参考に、LPの改善を進めてください。")
     
     # 既存の質問ボタンは保持
     
@@ -5290,30 +5136,29 @@ elif selected_analysis == "瞬フォーム分析":
          st.session_state.shun_form_ai_open = True
  
      if st.session_state.shun_form_ai_open:
-         with st.container():
-             with st.spinner("AIがフォームデータを分析中..."):
-                 st.markdown("#### 1. 現状の評価")
-                 st.info("""
-                 フォーム全体のパフォーマンスを分析した結果、**フォーム送信率（45.6%）** に改善の余地があることが分かりました。
-                 特に、**ページ3** での平均滞在時間が短く、ページ逆行率が他のページより高い傾向にあります。このページがユーザーにとってのボトルネックとなっている可能性が高いです。
-                 一方で、離脱防止POPや一時保存からの再開率は高く、フォームを完了したいというユーザーの意欲は高いと推察されます。
-                 """)
- 
-                 st.markdown("#### 2. 今後の考察と改善案")
-                 st.warning("""
-                 **ページ3の質問内容の見直しが最優先課題です。**
-                 - **考察**: ページ3の質問がユーザーにとって分かりにくい、または答えるのが面倒だと感じさせている可能性があります。
-                 - **改善案**:
-                     1. **質問文の簡略化**: より直感的で分かりやすい言葉に修正します。
-                     2. **選択肢の見直し**: 選択肢が多すぎる場合は減らす、またはラジオボタンからプルダウンに変更するなど、UIを改善します。
-                     3. **入力補助機能の追加**: 例えば、住所入力であれば郵便番号からの自動入力機能を追加します。
-                 
-                 これらの改善案についてA/Bテストを実施し、最も効果的な変更を特定することをお勧めします。
-                 """)
- 
-             if st.button("AI分析を閉じる", key="shun_form_ai_close"):
-                 st.session_state.shun_form_ai_open = False
- 
+        with st.spinner("AIがフォームデータを分析中..."):
+            context_data = f"""
+            - 期間: {start_date} ～ {end_date}
+            - 対象LP: {selected_lp}
+            - フォームのページ別データ:
+            {df_page.to_markdown(index=False)}
+            """
+            prompt = """
+            あなたはEFO（入力フォーム最適化）の専門家です。上記の瞬フォームのページ別データを基に、以下の構成で分析と提案を行ってください。
+
+            ### 1. 現状の評価
+            - フォーム全体のパフォーマンスを評価し、特に改善の余地がある指標を指摘してください。
+            - 「平均滞在時間」や「ページ逆行率」から、ユーザーが最もつまずいている「ボトルネックページ」を特定し、その理由を推察してください。
+
+            ### 2. 今後の考察と改善案
+            - 特定したボトルネックページについて、考えられる具体的な改善アクション案を3つ提案してください。（例：質問文の簡略化、UIの改善、入力補助機能の追加など）
+            """
+            ai_response = generate_ai_insight(prompt, context_data)
+            st.markdown(ai_response)
+
+        if st.button("AI分析を閉じる", key="shun_form_ai_close"):
+            st.session_state.shun_form_ai_open = False
+
      # --- よくある質問 ---
      st.markdown("#### このページの分析について質問する")
      if 'shun_form_faq_toggle' not in st.session_state:
