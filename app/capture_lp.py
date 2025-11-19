@@ -291,7 +291,7 @@ def verify_image_exists(url: str, timeout: int = 5) -> bool:
     try:
         response = requests.head(url, timeout=timeout, allow_redirects=True)
         return response.status_code == 200
-    except:
+    except requests.RequestException:
         return False
 
 

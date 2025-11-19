@@ -362,13 +362,12 @@ st.sidebar.markdown("---")
 DEFAULT_PAGE = "使用ガイド"
 
 try:
-    # Streamlit 1.10.0以降の推奨される方法
+    # Streamlit 1.30.0+
     query_params = st.query_params.to_dict()
     selected_analysis = query_params.get("page", DEFAULT_PAGE)
 except AttributeError:
-    # 古いStreamlitバージョン向けのフォールバック
+    # Streamlit < 1.30.0
     query_params = st.experimental_get_query_params()
-    # experimental_get_query_paramsは値がリストで返されるため、最初の要素を取得
     if "page" in query_params and query_params["page"]:
         selected_analysis = query_params["page"][0]
     else:
@@ -3231,29 +3230,27 @@ elif selected_analysis == "動画・スクロール分析":
                 non_video_cvr = safe_rate(non_video_cv, non_video_sessions) * 100
 
             with st.spinner("AIがエンゲージメントデータを分析中..."):
-                st.markdown("#### 1. 現状の評価")
-                if len(video_df) > 0:
-                    st.info(f"""
-                    **動画視聴とコンバージョンの関係:**
-                    動画を視聴したユーザーのコンバージョン率は **{video_cvr:.2f}%** であり、視聴しなかったユーザーの **{non_video_cvr:.2f}%** と比較して高い傾向にあります。これは、動画コンテンツがユーザーの理解を深め、コンバージョンを促進する上で有効であることを示唆しています。
-                    """)
-                else:
-                    st.info("このLPには動画コンテンツのデータがありません。")
+                context_data = f"""
+                - 期間: {start_date} ～ {end_date}
+                - 対象LP: {selected_lp}
+                - 動画視聴者のCVR: {video_cvr:.2f}%
+                - 動画非視聴者のCVR: {non_video_cvr:.2f}%
+                - 動画視聴セッション数: {video_sessions if 'video_sessions' in locals() else 0}
+                - 動画非視聴セッション数: {non_video_sessions if 'non_video_sessions' in locals() else 0}
+                """
+                prompt = """
+                あなたはWebマーケティングの専門家です。上記の動画視聴データとスクロール行動の一般的な傾向を基に、以下の構成で分析と提案を行ってください。
 
-                st.info("""
-                **スクロール行動とコンバージョンの関係:**
-                逆行率が高いページや、スクロール率が低いにもかかわらず離脱が多いページは、ユーザーがコンテンツに満足していないか、求めている情報を見つけられていない可能性があります。
-                """)
+                ### 1. 現状の評価
+                - 動画視聴者と非視聴者のCVRを比較し、動画コンテンツの有効性を評価してください。
+                - スクロール率と離脱率の関係性について、一般的なWeb行動心理の観点から考察を加えてください。
 
-                st.markdown("#### 2. 今後の考察と改善案")
-                st.warning("""
-                **動画コンテンツの活用:**
-                動画の視聴完了率や、どの部分で視聴を止めたかを分析することで、さらにコンテンツを改善できます。動画の冒頭で強いメッセージを伝え、視聴維持率を高める工夫が重要です。
-                
-                **スクロール体験の改善:**
-                - **逆行率が高いページ**: なぜユーザーが戻る必要があるのかを分析します。情報が不足している場合は補足し、ナビゲーションが分かりにくい場合は改善します。
-                - **スクロール率が低いページ**: ページの冒頭（ファーストビュー）でユーザーの興味を引き、続きを読む動機付けを与える必要があります。魅力的なキャッチコピーや画像の使用が効果的です。
-                """)
+                ### 2. 今後の考察と改善案
+                - 動画コンテンツをどのように活用すればさらにCVRを向上させられるか、具体的なアイデアを2つ提案してください。
+                - スクロール率が低い（ファーストビュー直下での離脱が多い）ページに対して、どのような改善施策が有効か提案してください。
+                """
+                ai_response = generate_ai_insight(prompt, context_data)
+                st.markdown(ai_response)
             if st.button("AI分析を閉じる", key="video_scroll_ai_close"):
                 st.session_state.video_scroll_ai_open = False
 
@@ -4034,23 +4031,27 @@ elif selected_analysis == "デモグラフィック情報":
     if st.session_state.demographic_ai_open:
         with st.container():
             with st.spinner("AIがデモグラフィックデータを分析中..."):
-                best_age_group = age_demo_df.loc[age_demo_df['CVR (%)'].idxmax()] if not age_demo_df.empty else {'年齢層': '不明', 'CVR (%)': 0}
-                
-                st.markdown("#### 1. 現状の評価")
-                st.info(f"""
-                ユーザー属性によって、LPに対する反応が異なることが分かります。
-                - **コアターゲット層**: **{best_age_group['年齢層']}** のCVRが{best_age_group['CVR (%)']:.1f}%と最も高く、このLPの主要なターゲット層であると考えられます。
-                - **性別差**: 性別によるCVRや滞在時間に大きな差がある場合、訴求するメッセージを男女で変えるなどの施策が有効かもしれません。
-                - **地域特性**: 特定の地域からのアクセスやCVRが高い場合、その地域に特化したキャンペーンや広告展開が効果的です。
-                """)
+                context_data = f"""
+                - 期間: {start_date} ～ {end_date}
+                - 対象LP: {selected_lp}
+                - 年齢層別データ:
+                {age_demo_df.to_markdown(index=False) if not age_demo_df.empty else 'データなし'}
+                - 性別データ:
+                {gender_demo_df.to_markdown(index=False) if not gender_demo_df.empty else 'データなし'}
+                """
+                prompt = """
+                あなたはマーケティングストラテジストです。上記のユーザー属性データを基に、以下の構成で分析と提案を行ってください。
 
-                st.markdown("#### 2. 今後の考察と改善案")
-                st.warning(f"""
-                **ペルソナの深化とターゲティングの最適化:**
-                - **ペルソナの再定義**: 最もパフォーマンスの高い「{best_age_group['年齢層']}」のユーザーが、どのようなニーズや課題を持っているのかを深く分析し、LPのメッセージングをさらに最適化します。
-                - **広告ターゲティングの改善**: パフォーマンスの高い年齢層、性別、地域に広告予算を集中させることで、広告効率（CPA）の改善が期待できます。
-                - **コンテンツのパーソナライズ**: 将来的には、アクセスしてきたユーザーの属性に応じて、表示するコンテンツ（キャッチコピーや画像）を動的に変更することで、さらなるCVR向上が見込めます。
-                """)
+                ### 1. 現状の評価
+                - 最もパフォーマンスが良い（CVRが高い、またはセッション数が多い）「コアターゲット層」を特定してください。
+                - 性別による傾向の違いがあれば指摘してください。
+
+                ### 2. 今後の考察と改善案
+                - 特定したコアターゲット層に向けて、LPのメッセージやデザインをどのように最適化すべきか提案してください。
+                - 新たなターゲット層を開拓するためのアイデアがあれば1つ提案してください。
+                """
+                ai_response = generate_ai_insight(prompt, context_data)
+                st.markdown(ai_response)
             if st.button("AI分析を閉じる", key="demographic_ai_close"):
                 st.session_state.demographic_ai_open = False
 
@@ -4381,6 +4382,9 @@ elif selected_analysis == "AIによる分析・考察":
 
     if st.session_state.ai_analysis_open:
         with st.spinner("AIがあなたのために包括的な分析レポートを作成中..."):
+            # LPのテキストコンテンツを取得
+            lp_text_content = safe_extract_lp_text_content(extract_lp_text_content, selected_lp)
+
             # AIに渡すためのコンテキストデータを準備
             context_data = f"""
             ### ユーザーからの入力情報
