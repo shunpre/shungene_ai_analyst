@@ -4,3 +4,7 @@ plotly
 numpy
 scipy
 tabulate
+google-cloud-bigquery
+google-generativeai
+requests
+beautifulsoup4
