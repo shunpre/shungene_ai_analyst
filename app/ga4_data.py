@@ -65,7 +65,27 @@ def generate_scroll_lp_dummy_data(days=30):
         elif medium == 'newsletter': channel = 'Email'
         else: channel = 'Direct'
         
+        # Campaign & Content
+        utm_campaign = np.random.choice(['summer_sale', 'new_arrival', 'brand_awareness', '(not set)'], p=[0.3, 0.3, 0.2, 0.2])
+        utm_content = np.random.choice(['banner_a', 'banner_b', 'video_ad', 'text_link', '(not set)'], p=[0.2, 0.2, 0.2, 0.2, 0.2])
+        
         load_time_ms = np.random.randint(500, 3000)
+        
+        # page_path (same as page_location for dummy data)
+        page_path = lp
+        # user_pseudo_id
+        user_pseudo_id = f"user_{np.random.randint(10000, 99999)}"
+        
+        # Demographics
+        age = np.random.choice(['18-24', '25-34', '35-44', '45-54', '55-64', '65+'], p=[0.1, 0.3, 0.3, 0.15, 0.1, 0.05])
+        gender = np.random.choice(['male', 'female', 'unknown'], p=[0.4, 0.5, 0.1])
+        
+        # AB Test
+        ab_test_target = 'cta_color' if np.random.random() < 0.5 else 'hero_image'
+        ab_variant = np.random.choice(['control', 'variant_a', 'variant_b'])
+        
+        # Video
+        video_src = 'video_main.mp4'
 
         # Base session event
         data.append({
@@ -76,12 +96,24 @@ def generate_scroll_lp_dummy_data(days=30):
             'device_type': device,
             'utm_source': source,
             'utm_medium': medium,
+            'utm_campaign': utm_campaign,
+            'utm_content': utm_content,
             'source_medium': source_medium,
             'channel': channel,
             'ga_session_number': ga_session_number,
             'scroll_depth': 0,
             'stay_ms': 0,
-            'load_time_ms': load_time_ms
+            'stay_ms': 0,
+            'load_time_ms': load_time_ms,
+            'page_path': page_path,
+            'user_pseudo_id': user_pseudo_id,
+            'age': age,
+            'gender': gender,
+            'ab_test_target': ab_test_target,
+            'ab_variant': ab_variant,
+            'video_src': video_src,
+            'event_timestamp': int(event_date.timestamp() * 1000000), # micros
+            'elem_classes': None
         })
         
         # Simulate Scroll Depth
@@ -109,7 +141,16 @@ def generate_scroll_lp_dummy_data(days=30):
                 'ga_session_number': ga_session_number,
                 'scroll_depth': d,
                 'stay_ms': np.random.randint(1000, 30000),
-                'load_time_ms': load_time_ms
+                'load_time_ms': load_time_ms,
+                'page_path': page_path,
+                'user_pseudo_id': user_pseudo_id,
+                'age': age,
+                'gender': gender,
+                'ab_test_target': ab_test_target,
+                'ab_variant': ab_variant,
+                'video_src': video_src,
+                'event_timestamp': int((event_date + timedelta(seconds=np.random.randint(5, 60))).timestamp() * 1000000),
+                'elem_classes': None
             })
             
         # Conversion Logic
@@ -129,7 +170,16 @@ def generate_scroll_lp_dummy_data(days=30):
                     'ga_session_number': ga_session_number,
                     'scroll_depth': reached_depth,
                     'stay_ms': np.random.randint(30000, 60000),
-                    'load_time_ms': load_time_ms
+                    'load_time_ms': load_time_ms,
+                    'page_path': page_path,
+                    'user_pseudo_id': user_pseudo_id,
+                    'age': age,
+                    'gender': gender,
+                    'ab_test_target': ab_test_target,
+                    'ab_variant': ab_variant,
+                    'video_src': video_src,
+                    'event_timestamp': int((event_date + timedelta(seconds=np.random.randint(60, 120))).timestamp() * 1000000),
+                    'elem_classes': 'cta-button-primary'
                 })
                 
                 if np.random.random() < 0.3: # 30% CVR after click
@@ -147,7 +197,16 @@ def generate_scroll_lp_dummy_data(days=30):
                         'scroll_depth': reached_depth,
                         'stay_ms': np.random.randint(60000, 120000),
                         'cv_type': 'purchase',
-                        'load_time_ms': load_time_ms
+                        'load_time_ms': load_time_ms,
+                        'page_path': page_path,
+                        'user_pseudo_id': user_pseudo_id,
+                        'age': age,
+                        'gender': gender,
+                        'ab_test_target': ab_test_target,
+                        'ab_variant': ab_variant,
+                        'video_src': video_src,
+                        'event_timestamp': int((event_date + timedelta(seconds=np.random.randint(120, 300))).timestamp() * 1000000),
+                        'elem_classes': None
                     })
 
     df = pd.DataFrame(data)
