@@ -1456,11 +1456,53 @@ elif selected_analysis == "スクロール分析":
 
     # AI分析
     st.markdown("### AIによる分析と考察")
-    if st.button("AI分析を実行", key="scroll_ai_btn", type="primary"):
-        with st.spinner("AIが分析中..."):
+    # AI分析の表示状態を管理
+    if 'scroll_ai_open' not in st.session_state:
+        st.session_state.scroll_ai_open = False
+
+    if st.button("AI分析を実行", key="scroll_ai_btn", type="primary", use_container_width=True):
+        st.session_state.scroll_ai_open = True
+
+    if st.session_state.scroll_ai_open:
+        with st.spinner("AIがスクロールデータを分析中..."):
             context = f"期間: {start_date}~{end_date}\nスクロール到達率データ:\n{retention_df.to_markdown()}"
             prompt = "スクロール到達率データを基に、ユーザーの離脱ポイント（ボトルネック）を特定し、改善案を3つ提案してください。"
-            st.markdown(generate_ai_insight(prompt, context))
+            ai_response = generate_ai_insight(prompt, context)
+            st.markdown(ai_response)
+
+        if st.button("AI分析を閉じる", key="scroll_ai_close"):
+            st.session_state.scroll_ai_open = False
+
+    # --- よくある質問 ---
+    st.markdown("#### このページの分析について質問する")
+    if 'scroll_faq_toggle' not in st.session_state:
+        st.session_state.scroll_faq_toggle = {1: False, 2: False, 3: False, 4: False}
+
+    faq_cols = st.columns(2)
+    with faq_cols[0]:
+        if st.button("どこで離脱が多いですか？", key="faq_scroll_1", use_container_width=True):
+            st.session_state.scroll_faq_toggle[1] = not st.session_state.scroll_faq_toggle[1]
+            st.session_state.scroll_faq_toggle[2], st.session_state.scroll_faq_toggle[3], st.session_state.scroll_faq_toggle[4] = False, False, False
+        if st.session_state.scroll_faq_toggle[1]:
+            st.info("詳細テーブルの「到達率」が急激に下がっている箇所（スクロール深度）が離脱ポイントです。例えば、30%から40%の間で到達率が10%以上下がっている場合、そのエリアのコンテンツに問題がある可能性があります。")
+        
+        if st.button("平均スクロール率の目安は？", key="faq_scroll_3", use_container_width=True):
+            st.session_state.scroll_faq_toggle[3] = not st.session_state.scroll_faq_toggle[3]
+            st.session_state.scroll_faq_toggle[1], st.session_state.scroll_faq_toggle[2], st.session_state.scroll_faq_toggle[4] = False, False, False
+        if st.session_state.scroll_faq_toggle[3]:
+            st.info("業界や商材によりますが、一般的にLPの平均スクロール率は30%〜50%程度と言われています。30%を下回る場合は、ファーストビューでの訴求が弱いか、ページ構成がユーザーの期待と合っていない可能性があります。")
+    with faq_cols[1]:
+        if st.button("読了率を上げるには？", key="faq_scroll_2", use_container_width=True):
+            st.session_state.scroll_faq_toggle[2] = not st.session_state.scroll_faq_toggle[2]
+            st.session_state.scroll_faq_toggle[1], st.session_state.scroll_faq_toggle[3], st.session_state.scroll_faq_toggle[4] = False, False, False
+        if st.session_state.scroll_faq_toggle[2]:
+            st.info("読了率（90%スクロール）を上げるには、ストーリー性のある構成にする、読みやすいデザイン（文字サイズ、行間）にする、途中で飽きさせないための画像や動画を配置する、などの工夫が有効です。")
+        
+        if st.button("スマホでの離脱対策は？", key="faq_scroll_4", use_container_width=True):
+            st.session_state.scroll_faq_toggle[4] = not st.session_state.scroll_faq_toggle[4]
+            st.session_state.scroll_faq_toggle[1], st.session_state.scroll_faq_toggle[2], st.session_state.scroll_faq_toggle[3] = False, False, False
+        if st.session_state.scroll_faq_toggle[4]:
+            st.info("スマホは画面が小さいため、文字の詰め込みすぎは厳禁です。箇条書きを活用する、画像を大きく表示する、タップしやすいボタン配置にするなど、スマホユーザーの操作性を最優先に考えたデザインに改善しましょう。")
 
 
 # タブ3: セグメント分析
@@ -2762,17 +2804,7 @@ elif selected_analysis == "動画エンゲージメント":
 
     st.markdown("---")
 
-    # 逆行率分析
-    st.markdown("ページ別平均逆行率")
-    st.markdown('<div class="graph-description">各ページでユーザーがどれだけ逆方向にスクロールしたかを表示します。逆行率が高いページは、ユーザーが迷っているまたは情報を再確認している可能性があります。</div>', unsafe_allow_html=True) # type: ignore
-    scroll_stats = filtered_df.groupby('page_num_dom')['scroll_pct'].mean().reset_index()
-    scroll_stats.columns = ['ページ番号', '平均逆行率']
-    scroll_stats['平均逆行率(%)'] = scroll_stats['平均逆行率'] * 100
-    
-    fig = px.bar(scroll_stats, x='ページ番号', y='平均逆行率(%)', text='平均逆行率(%)')
-    fig.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
-    fig.update_layout(height=400, showlegend=False, xaxis_title='ページ番号', yaxis_title='平均逆行率 (%)', dragmode=False)
-    st.plotly_chart(fig, use_container_width=True, key='plotly_chart_18') # This already has use_container_width=True
+
     
     # 動画視聴分析（動画イベントがある場合）
     video_df = filtered_df[filtered_df['video_src'].notna()]
@@ -2815,30 +2847,7 @@ elif selected_analysis == "動画エンゲージメント":
         fig.update_layout(height=400, showlegend=False, yaxis_title='コンバージョン率 (%)', dragmode=False)
         st.plotly_chart(fig, use_container_width=True, key='plotly_chart_19') # This already has use_container_width=True
     
-    # 逆行率別CVR
-    st.markdown("逆行率別コンバージョン率")
-    st.markdown('<div class="graph-description">逆行率の範囲ごとにコンバージョン率を表示します。逆行率が高いほどコンバージョン率が低い傾向があるかを確認できます。</div>', unsafe_allow_html=True) # type: ignore
-    
-    # 逆行率を区間に分ける
-    filtered_df_scroll = filtered_df.copy()
-    filtered_df_scroll['scroll_range'] = pd.cut(filtered_df_scroll['scroll_pct'], bins=[0, 0.25, 0.5, 0.75, 1.0], labels=['0-25%', '25-50%', '50-75%', '75-100%'])
-    
-    scroll_range_sessions = filtered_df_scroll.groupby('scroll_range', observed=True)['session_id'].nunique().reset_index()
-    scroll_range_sessions.columns = ['逆行率', 'セッション数']
-    scroll_range_sessions['逆行率'] = scroll_range_sessions['逆行率'].astype(str)
-    
-    scroll_range_cv = filtered_df_scroll[filtered_df_scroll['cv_type'].notna()].groupby('scroll_range', observed=True)['session_id'].nunique().reset_index()
-    scroll_range_cv.columns = ['逆行率', 'コンバージョン数']
-    scroll_range_cv['逆行率'] = scroll_range_cv['逆行率'].astype(str)
-    
-    scroll_range_stats = scroll_range_sessions.merge(scroll_range_cv, on='逆行率', how='left')
-    scroll_range_stats['コンバージョン数'] = scroll_range_stats['コンバージョン数'].fillna(0)
-    scroll_range_stats['コンバージョン率'] = scroll_range_stats.apply(lambda row: safe_rate(row['コンバージョン数'], row['セッション数']) * 100, axis=1)
-    
-    fig = px.bar(scroll_range_stats, x='逆行率', y='コンバージョン率', text='コンバージョン率')
-    fig.update_traces(texttemplate='%{text:.2f}%', textposition='outside')
-    fig.update_layout(height=400, showlegend=False, xaxis_title='逆行率', yaxis_title='コンバージョン率 (%)', dragmode=False)
-    st.plotly_chart(fig, use_container_width=True, key='plotly_chart_20') # This already has use_container_width=True
+
 
     st.markdown("---")
 
@@ -4685,7 +4694,101 @@ elif selected_analysis == "アラート":
     else: # type: ignore
         st.info("アラートを生成するための十分なデータがありません（最低8日分のデータが必要です）。")
 
-elif selected_analysis == "瞬フォーム分析":
+elif selected_analysis == "ファネル分析":
+    st.markdown('<div class="sub-header">ファネル分析</div>', unsafe_allow_html=True)
+    
+    # 共通フィルター
+    st.markdown('<div class="sub-header">フィルター設定</div>', unsafe_allow_html=True)
+    filter_cols = st.columns(4)
+    with filter_cols[0]:
+        period_options = ["今日", "昨日", "過去7日間", "過去14日間", "過去30日間", "全期間"]
+        selected_period = st.selectbox("期間を選択", period_options, index=2, key="funnel_period")
+    
+    # 期間設定
+    today = df['event_date'].max().date()
+    if selected_period == "今日": start_date = end_date = today
+    elif selected_period == "昨日": start_date = end_date = today - timedelta(days=1)
+    elif selected_period == "過去7日間": start_date, end_date = today - timedelta(days=6), today
+    elif selected_period == "過去14日間": start_date, end_date = today - timedelta(days=13), today
+    elif selected_period == "過去30日間": start_date, end_date = today - timedelta(days=29), today
+    else: start_date, end_date = df['event_date'].min().date(), df['event_date'].max().date()
+
+    filtered_df = df[(df['event_date'] >= pd.to_datetime(start_date)) & (df['event_date'] <= pd.to_datetime(end_date))]
+    
+    if len(filtered_df) == 0:
+        st.warning("データがありません。")
+        st.stop()
+
+    # ファネルデータの作成
+    total_sessions = filtered_df['session_id'].nunique()
+    scroll_50 = filtered_df[filtered_df['scroll_depth'] >= 50]['session_id'].nunique()
+    read_through = filtered_df[filtered_df['scroll_depth'] >= 90]['session_id'].nunique()
+    cta_click = filtered_df[filtered_df['event_name'] == 'click_cta']['session_id'].nunique()
+    conversion = filtered_df[filtered_df['cv_type'].notna()]['session_id'].nunique()
+
+    funnel_data = pd.DataFrame({
+        '段階': ['セッション', 'スクロール50%', '読了(90%)', 'CTAクリック', 'コンバージョン'],
+        '数': [total_sessions, scroll_50, read_through, cta_click, conversion]
+    })
+
+    fig = go.Figure(go.Funnel(
+        y=funnel_data['段階'],
+        x=funnel_data['数'],
+        textinfo="value+percent initial"
+    ))
+    fig.update_layout(height=500)
+    st.plotly_chart(fig, use_container_width=True)
+
+    # AI分析
+    st.markdown("### AIによる分析と考察")
+    if 'funnel_ai_open' not in st.session_state:
+        st.session_state.funnel_ai_open = False
+
+    if st.button("AI分析を実行", key="funnel_ai_btn", type="primary", use_container_width=True):
+        st.session_state.funnel_ai_open = True
+
+    if st.session_state.funnel_ai_open:
+        with st.spinner("AIがファネルデータを分析中..."):
+            context = f"期間: {start_date}~{end_date}\nファネルデータ:\n{funnel_data.to_markdown()}"
+            prompt = "ファネルデータを基に、最大の離脱ポイントを特定し、改善策を提案してください。"
+            ai_response = generate_ai_insight(prompt, context)
+            st.markdown(ai_response)
+
+        if st.button("AI分析を閉じる", key="funnel_ai_close"):
+            st.session_state.funnel_ai_open = False
+
+    # --- よくある質問 ---
+    st.markdown("#### このページの分析について質問する")
+    if 'funnel_faq_toggle' not in st.session_state:
+        st.session_state.funnel_faq_toggle = {1: False, 2: False, 3: False, 4: False}
+
+    faq_cols = st.columns(2)
+    with faq_cols[0]:
+        if st.button("どこが最大のボトルネックですか？", key="faq_funnel_1", use_container_width=True):
+            st.session_state.funnel_faq_toggle[1] = not st.session_state.funnel_faq_toggle[1]
+            st.session_state.funnel_faq_toggle[2], st.session_state.funnel_faq_toggle[3], st.session_state.funnel_faq_toggle[4] = False, False, False
+        if st.session_state.funnel_faq_toggle[1]:
+            st.info("ファネルグラフで、前の段階からの減少幅（%）が最も大きい箇所がボトルネックです。例えば、「スクロール50%」から「読了」への減少が大きければ、コンテンツの中盤に問題があります。")
+        
+        if st.button("フォーム到達率が低い原因は？", key="faq_funnel_3", use_container_width=True):
+            st.session_state.funnel_faq_toggle[3] = not st.session_state.funnel_faq_toggle[3]
+            st.session_state.funnel_faq_toggle[1], st.session_state.funnel_faq_toggle[2], st.session_state.funnel_faq_toggle[4] = False, False, False
+        if st.session_state.funnel_faq_toggle[3]:
+            st.info("CTAボタン（申し込みボタン）のデザインや配置、文言が魅力的でない可能性があります。また、ボタンを押した後の遷移速度が遅い、エラーが出るなどの技術的な問題がないかも確認しましょう。")
+    with faq_cols[1]:
+        if st.button("CTAクリック率を上げるには？", key="faq_funnel_2", use_container_width=True):
+            st.session_state.funnel_faq_toggle[2] = not st.session_state.funnel_faq_toggle[2]
+            st.session_state.funnel_faq_toggle[1], st.session_state.funnel_faq_toggle[3], st.session_state.funnel_faq_toggle[4] = False, False, False
+        if st.session_state.funnel_faq_toggle[2]:
+            st.info("CTAボタンを「目立つ色」にする、「今すぐ無料で試す」などの「メリットが伝わる文言」にする、ボタンの近くに「マイクロコピー（安心材料など）」を配置する、などの改善が有効です。")
+        
+        if st.button("ファネル改善の優先順位は？", key="faq_funnel_4", use_container_width=True):
+            st.session_state.funnel_faq_toggle[4] = not st.session_state.funnel_faq_toggle[4]
+            st.session_state.funnel_faq_toggle[1], st.session_state.funnel_faq_toggle[2], st.session_state.funnel_faq_toggle[3] = False, False, False
+        if st.session_state.funnel_faq_toggle[4]:
+            st.info("基本的には「コンバージョンに近い段階」から改善するのが鉄則です。つまり、フォーム入力完了率 → CTAクリック率 → 読了率 → スクロール率 の順に見直すと、売上へのインパクトが出やすくなります。")
+
+elif selected_analysis == "フォーム分析":
      st.markdown('<div class="sub-header">瞬フォーム分析</div>', unsafe_allow_html=True)
  
      # --- フィルター設定 ---
