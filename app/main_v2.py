@@ -302,7 +302,7 @@ def generate_ai_insight(prompt, context_data=""):
     try:
         api_key = st.secrets["GOOGLE_API_KEY"]
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-pro')
+        model = genai.GenerativeModel('gemini-1.5-pro')
         
         full_prompt = f"""
         あなたは優秀なWebアナリストです。以下のデータとコンテキストを基に、プロの視点から現状の評価と具体的な改善提案をしてください。
@@ -317,6 +317,7 @@ def generate_ai_insight(prompt, context_data=""):
         """
         
         response = model.generate_content(full_prompt)
+            
         return response.text
     except Exception as e:
         return f"AI分析の実行中にエラーが発生しました。APIキーが正しく設定されているか確認してください。エラー: {e}"
@@ -1406,33 +1407,74 @@ elif selected_analysis == "ページ分析":
 elif selected_analysis == "スクロール分析":
     st.markdown('<div class="sub-header">スクロール分析</div>', unsafe_allow_html=True)
     
-    # 共通フィルター (簡易版)
+    # --- 共通フィルター ---
     st.markdown('<div class="sub-header">フィルター設定</div>', unsafe_allow_html=True)
-    filter_cols = st.columns(4)
-    with filter_cols[0]:
-        period_options = ["今日", "昨日", "過去7日間", "過去14日間", "過去30日間", "全期間"]
+    filter_cols_1 = st.columns(4)
+    filter_cols_2 = st.columns(4)
+
+    with filter_cols_1[0]:
+        period_options = ["今日", "昨日", "過去7日間", "過去14日間", "過去30日間", "今月", "先月", "全期間", "カスタム"]
         selected_period = st.selectbox("期間を選択", period_options, index=2, key="scroll_period")
-    
+
+    with filter_cols_1[1]:
+        lp_options = sorted(df['page_location'].dropna().unique().tolist())
+        selected_lp = st.selectbox("LP選択", lp_options, index=0 if lp_options else None, key="scroll_lp", disabled=not lp_options)
+
+    with filter_cols_1[2]:
+        device_options = ["すべて"] + sorted(df['device_type'].dropna().unique().tolist())
+        selected_device = st.selectbox("デバイス選択", device_options, index=0, key="scroll_device")
+
+    with filter_cols_1[3]:
+        user_type_options = ["すべて", "新規", "リピート"]
+        selected_user_type = st.selectbox("新規/リピート", user_type_options, index=0, key="scroll_user_type")
+
+    with filter_cols_2[0]:
+        conversion_status_options = ["すべて", "コンバージョン", "非コンバージョン"]
+        selected_conversion_status = st.selectbox("CV/非CV", conversion_status_options, index=0, key="scroll_conversion_status")
+
+    with filter_cols_2[1]:
+        channel_options = ["すべて"] + sorted(df['channel'].unique().tolist())
+        selected_channel = st.selectbox("チャネル", channel_options, index=0, key="scroll_channel")
+
+    with filter_cols_2[2]:
+        source_medium_options = ["すべて"] + sorted(df['source_medium'].unique().tolist())
+        selected_source_medium = st.selectbox("参照元/メディア", source_medium_options, index=0, key="scroll_source_medium")
+
     # 期間設定
     today = df['event_date'].max().date()
-    if selected_period == "今日": start_date = end_date = today
-    elif selected_period == "昨日": start_date = end_date = today - timedelta(days=1)
+    if selected_period == "今日": start_date, end_date = today, today
+    elif selected_period == "昨日": start_date, end_date = today - timedelta(days=1), today - timedelta(days=1)
     elif selected_period == "過去7日間": start_date, end_date = today - timedelta(days=6), today
     elif selected_period == "過去14日間": start_date, end_date = today - timedelta(days=13), today
     elif selected_period == "過去30日間": start_date, end_date = today - timedelta(days=29), today
-    else: start_date, end_date = df['event_date'].min().date(), df['event_date'].max().date()
+    elif selected_period == "今月": start_date, end_date = today.replace(day=1), today
+    elif selected_period == "先月":
+        last_month_end = today.replace(day=1) - timedelta(days=1)
+        start_date, end_date = last_month_end.replace(day=1), last_month_end
+    elif selected_period == "全期間": start_date, end_date = df['event_date'].min().date(), df['event_date'].max().date()
+    elif selected_period == "カスタム":
+        c1, c2 = st.columns(2)
+        with c1: start_date = st.date_input("開始日", df['event_date'].min(), key="scroll_start")
+        with c2: end_date = st.date_input("終了日", df['event_date'].max(), key="scroll_end")
 
+    # データフィルタリング
     filtered_df = df[(df['event_date'] >= pd.to_datetime(start_date)) & (df['event_date'] <= pd.to_datetime(end_date))]
-    
+    if selected_lp: filtered_df = filtered_df[filtered_df['page_location'] == selected_lp]
+    if selected_device != "すべて": filtered_df = filtered_df[filtered_df['device_type'] == selected_device]
+    if selected_user_type != "すべて": filtered_df = filtered_df[filtered_df['user_type'] == selected_user_type]
+    if selected_conversion_status != "すべて": filtered_df = filtered_df[filtered_df['conversion_status'] == selected_conversion_status]
+    if selected_channel != "すべて": filtered_df = filtered_df[filtered_df['channel'] == selected_channel]
+    if selected_source_medium != "すべて": filtered_df = filtered_df[filtered_df['source_medium'] == selected_source_medium]
+
     if len(filtered_df) == 0:
         st.warning("データがありません。")
         st.stop()
 
-    # スクロール到達率の計算 (10%刻み)
+    # スクロール到達率の計算 (5%刻みで細かく分析)
     st.markdown("#### スクロール到達率 (Retention)")
-    st.markdown('<div class="graph-description">ユーザーがLPのどこまでスクロールしたか（到達率）を可視化します。急激にドロップしている箇所が離脱ポイントです。</div>', unsafe_allow_html=True)
+    st.markdown('<div class="graph-description">ユーザーがLPのどこまでスクロールしたか（到達率）を可視化します。エリアチャートで離脱の推移を滑らかに表示します。</div>', unsafe_allow_html=True)
 
-    scroll_buckets = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+    scroll_buckets = list(range(0, 101, 5)) # 5%刻みに変更
     retention_data = []
     total_sessions = filtered_df['session_id'].nunique()
 
@@ -1440,14 +1482,25 @@ elif selected_analysis == "スクロール分析":
         # その深度以上に到達したセッション数
         reached = filtered_df[filtered_df['scroll_depth'] >= depth]['session_id'].nunique()
         rate = (reached / total_sessions * 100) if total_sessions > 0 else 0
-        retention_data.append({'スクロール深度': f"{depth}%", '到達率': rate, '到達数': reached})
+        retention_data.append({'スクロール深度': depth, '到達率': rate, '到達数': reached})
     
     retention_df = pd.DataFrame(retention_data)
     
-    # 棒グラフで表示
-    fig = px.bar(retention_df, x='スクロール深度', y='到達率', text='到達率')
-    fig.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
-    fig.update_layout(yaxis_title="到達率 (%)", height=400)
+    # エリアチャート（面グラフ）で表示
+    fig = px.area(retention_df, x='スクロール深度', y='到達率', markers=True, title='スクロール到達率推移')
+    fig.update_traces(
+        line_color='#002060', 
+        fillcolor='rgba(0, 32, 96, 0.3)',
+        hovertemplate='スクロール深度: %{x}%<br>到達率: %{y:.1f}%<br>到達数: %{customdata:,}<extra></extra>',
+        customdata=retention_df['到達数']
+    )
+    fig.update_layout(
+        yaxis_title="到達率 (%)", 
+        xaxis_title="スクロール深度 (%)",
+        height=450,
+        xaxis=dict(tickmode='linear', tick0=0, dtick=10), # X軸のメモリは10%刻みで見やすく
+        yaxis=dict(range=[0, 105])
+    )
     st.plotly_chart(fig, use_container_width=True)
 
     # 詳細テーブル
@@ -2563,6 +2616,35 @@ elif selected_analysis == "インタラクション分析":
         legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5)
     )
     st.plotly_chart(fig, use_container_width=True, key='plotly_chart_interaction_contribution')
+
+    # --- インタラクション バブルチャート (項目のプロット) ---
+    st.markdown("#### インタラクション要素の貢献度マップ")
+    st.markdown('<div class="graph-description">各要素の「CVRリフト率（貢献度）」と「CVR（実力）」をプロットしました。右上の要素ほど、CVへの貢献度が高く、かつ高確率でCVに繋がっています。</div>', unsafe_allow_html=True)
+
+    if not contribution_df.empty:
+        fig_bubble = px.scatter(
+            contribution_df,
+            x='CVRリフト率 (%)',
+            y='CVR',
+            size='セッション数', # バブルの大きさは利用ボリューム
+            color='インタラクション要素',
+            text='インタラクション要素',
+            hover_data=['CV数', 'CVRリフト率 (%)']
+        )
+        fig_bubble.update_traces(textposition='top center')
+        fig_bubble.update_layout(
+            height=500,
+            xaxis_title="CVRリフト率 (%)",
+            yaxis_title="CVR (%)",
+            showlegend=False, # テキストで表示するので凡例は隠す（すっきりさせる）
+            xaxis=dict(zeroline=True, zerolinewidth=2, zerolinecolor='gray'), # X=0の線を強調
+        )
+        # 象限の背景色を追加（リッチな見た目）
+        fig_bubble.add_shape(type="rect", xref="paper", yref="paper", x0=0.5, y0=0.5, x1=1, y1=1, fillcolor="rgba(0, 128, 0, 0.05)", layer="below", line_width=0)
+        
+        st.plotly_chart(fig_bubble, use_container_width=True, key='plotly_chart_interaction_bubble')
+    else:
+        st.info("プロットするデータがありません。")
 
     st.markdown("---")
 
@@ -4697,24 +4779,65 @@ elif selected_analysis == "アラート":
 elif selected_analysis == "ファネル分析":
     st.markdown('<div class="sub-header">ファネル分析</div>', unsafe_allow_html=True)
     
-    # 共通フィルター
+    # --- 共通フィルター ---
     st.markdown('<div class="sub-header">フィルター設定</div>', unsafe_allow_html=True)
-    filter_cols = st.columns(4)
-    with filter_cols[0]:
-        period_options = ["今日", "昨日", "過去7日間", "過去14日間", "過去30日間", "全期間"]
+    filter_cols_1 = st.columns(4)
+    filter_cols_2 = st.columns(4)
+
+    with filter_cols_1[0]:
+        period_options = ["今日", "昨日", "過去7日間", "過去14日間", "過去30日間", "今月", "先月", "全期間", "カスタム"]
         selected_period = st.selectbox("期間を選択", period_options, index=2, key="funnel_period")
-    
+
+    with filter_cols_1[1]:
+        lp_options = sorted(df['page_location'].dropna().unique().tolist())
+        selected_lp = st.selectbox("LP選択", lp_options, index=0 if lp_options else None, key="funnel_lp", disabled=not lp_options)
+
+    with filter_cols_1[2]:
+        device_options = ["すべて"] + sorted(df['device_type'].dropna().unique().tolist())
+        selected_device = st.selectbox("デバイス選択", device_options, index=0, key="funnel_device")
+
+    with filter_cols_1[3]:
+        user_type_options = ["すべて", "新規", "リピート"]
+        selected_user_type = st.selectbox("新規/リピート", user_type_options, index=0, key="funnel_user_type")
+
+    with filter_cols_2[0]:
+        conversion_status_options = ["すべて", "コンバージョン", "非コンバージョン"]
+        selected_conversion_status = st.selectbox("CV/非CV", conversion_status_options, index=0, key="funnel_conversion_status")
+
+    with filter_cols_2[1]:
+        channel_options = ["すべて"] + sorted(df['channel'].unique().tolist())
+        selected_channel = st.selectbox("チャネル", channel_options, index=0, key="funnel_channel")
+
+    with filter_cols_2[2]:
+        source_medium_options = ["すべて"] + sorted(df['source_medium'].unique().tolist())
+        selected_source_medium = st.selectbox("参照元/メディア", source_medium_options, index=0, key="funnel_source_medium")
+
     # 期間設定
     today = df['event_date'].max().date()
-    if selected_period == "今日": start_date = end_date = today
-    elif selected_period == "昨日": start_date = end_date = today - timedelta(days=1)
+    if selected_period == "今日": start_date, end_date = today, today
+    elif selected_period == "昨日": start_date, end_date = today - timedelta(days=1), today - timedelta(days=1)
     elif selected_period == "過去7日間": start_date, end_date = today - timedelta(days=6), today
     elif selected_period == "過去14日間": start_date, end_date = today - timedelta(days=13), today
     elif selected_period == "過去30日間": start_date, end_date = today - timedelta(days=29), today
-    else: start_date, end_date = df['event_date'].min().date(), df['event_date'].max().date()
+    elif selected_period == "今月": start_date, end_date = today.replace(day=1), today
+    elif selected_period == "先月":
+        last_month_end = today.replace(day=1) - timedelta(days=1)
+        start_date, end_date = last_month_end.replace(day=1), last_month_end
+    elif selected_period == "全期間": start_date, end_date = df['event_date'].min().date(), df['event_date'].max().date()
+    elif selected_period == "カスタム":
+        c1, c2 = st.columns(2)
+        with c1: start_date = st.date_input("開始日", df['event_date'].min(), key="funnel_start")
+        with c2: end_date = st.date_input("終了日", df['event_date'].max(), key="funnel_end")
 
+    # データフィルタリング
     filtered_df = df[(df['event_date'] >= pd.to_datetime(start_date)) & (df['event_date'] <= pd.to_datetime(end_date))]
-    
+    if selected_lp: filtered_df = filtered_df[filtered_df['page_location'] == selected_lp]
+    if selected_device != "すべて": filtered_df = filtered_df[filtered_df['device_type'] == selected_device]
+    if selected_user_type != "すべて": filtered_df = filtered_df[filtered_df['user_type'] == selected_user_type]
+    if selected_conversion_status != "すべて": filtered_df = filtered_df[filtered_df['conversion_status'] == selected_conversion_status]
+    if selected_channel != "すべて": filtered_df = filtered_df[filtered_df['channel'] == selected_channel]
+    if selected_source_medium != "すべて": filtered_df = filtered_df[filtered_df['source_medium'] == selected_source_medium]
+
     if len(filtered_df) == 0:
         st.warning("データがありません。")
         st.stop()
