@@ -43,6 +43,50 @@ st.markdown(hide_decoration_bar_style, unsafe_allow_html=True)
 # ブラウザがスクロールする先の「基点」を設置
 st.markdown('<a id="top-anchor"></a>', unsafe_allow_html=True)
 
+# --- 簡易ログイン機能 ---
+if 'is_logged_in' not in st.session_state:
+    st.session_state['is_logged_in'] = False
+
+if not st.session_state['is_logged_in']:
+    st.markdown("""
+    <style>
+        .stApp {
+            background-color: #f0f2f6;
+        }
+        .login-container {
+            max_width: 400px;
+            margin: 100px auto;
+            padding: 2rem;
+            background-color: white;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+        .login-title {
+            color: #002060;
+            font-size: 1.5rem;
+            font-weight: bold;
+            margin-bottom: 1.5rem;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.markdown('<div class="login-title">瞬ジェネ AIアナライザー<br>ログイン</div>', unsafe_allow_html=True)
+        
+        input_id = st.text_input("ID", key="login_id")
+        input_pass = st.text_input("Password", type="password", key="login_pass")
+        
+        if st.button("ログイン", type="primary", use_container_width=True):
+            if input_id == "1121" and input_pass == "1124":
+                st.session_state['is_logged_in'] = True
+                st.rerun()
+            else:
+                st.error("IDまたはパスワードが間違っています")
+    
+    st.stop() # ログインしていない場合はここで処理を止める
+
 # --- ページ遷移関数 ---
 def navigate_to(page_name):
     """指定されたページに遷移する"""
