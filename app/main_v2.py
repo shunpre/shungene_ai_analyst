@@ -81,6 +81,13 @@ if not st.session_state['is_logged_in']:
             font-weight: bold;
             color: #333333 !important;
         }
+        /* プライマリボタン（赤系）の文字色を白にする */
+        div.stButton > button[kind="primary"] {
+            color: white !important;
+        }
+        div.stButton > button[kind="primary"] p {
+            color: white !important;
+        }
     </style>
     """, unsafe_allow_html=True)
 
