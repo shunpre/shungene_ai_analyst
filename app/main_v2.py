@@ -18,7 +18,7 @@ import json
 # from google.cloud import bigquery # Removed BigQuery
 # from google.oauth2 import service_account # Removed Service Account
 import google.generativeai as genai
-from app.ga4_data import fetch_ga4_data, generate_scroll_lp_dummy_data
+from ga4_data import fetch_ga4_data, generate_scroll_lp_dummy_data
 # scipyをインポート（A/Bテストの有意差検定で使用）
 
 # ページ設定
