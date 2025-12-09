@@ -57,21 +57,21 @@ if not st.session_state['is_logged_in']:
             max_width: 400px;
             margin: 100px auto;
             padding: 2rem;
-            background-color: white;
+            background-color: #002060;
             border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
             text-align: center;
         }
         .login-title {
-            color: #002060;
+            color: white;
             font-size: 1.5rem;
             font-weight: bold;
             margin-bottom: 1.5rem;
         }
         /* 入力欄のスタイル強化 */
         input[type="text"], input[type="password"] {
-            border: 2px solid #002060 !important;
-            background-color: #e6f0ff !important;
+            border: 1px solid #ccc !important;
+            background-color: #ffffff !important;
             border-radius: 5px !important;
             padding: 10px !important;
             color: #333 !important;
@@ -79,7 +79,7 @@ if not st.session_state['is_logged_in']:
         /* ラベルのスタイル */
         div[data-testid="stMarkdownContainer"] p {
             font-weight: bold;
-            color: #002060;
+            color: white !important;
         }
     </style>
     """, unsafe_allow_html=True)
