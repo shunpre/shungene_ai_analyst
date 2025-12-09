@@ -57,13 +57,13 @@ if not st.session_state['is_logged_in']:
             max_width: 400px;
             margin: 100px auto;
             padding: 2rem;
-            background-color: #002060;
+            background-color: white;
             border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
             text-align: center;
         }
         .login-title {
-            color: white;
+            color: #333333;
             font-size: 1.5rem;
             font-weight: bold;
             margin-bottom: 1.5rem;
@@ -79,7 +79,7 @@ if not st.session_state['is_logged_in']:
         /* ラベルのスタイル */
         div[data-testid="stMarkdownContainer"] p {
             font-weight: bold;
-            color: white !important;
+            color: #333333 !important;
         }
     </style>
     """, unsafe_allow_html=True)
