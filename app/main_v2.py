@@ -297,10 +297,12 @@ def safe_extract_lp_text_content(extractor_func, url):
 
 # --- AI分析関数 ---
 @st.cache_data(show_spinner=False) # スピナーは関数内で制御
-def generate_ai_insight(prompt, context_data=""):
+def generate_ai_insight(prompt, context_data="", api_key=None):
     """Gemini APIを呼び出して分析結果を生成する"""
+    if not api_key:
+        return "⚠️ APIキーが設定されていません。サイドバーでGoogle APIキーを入力してください。"
+
     try:
-        api_key = st.secrets["GOOGLE_API_KEY"]
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-1.5-pro')
         
@@ -320,7 +322,7 @@ def generate_ai_insight(prompt, context_data=""):
             
         return response.text
     except Exception as e:
-        return f"AI分析の実行中にエラーが発生しました。APIキーが正しく設定されているか確認してください。エラー: {e}"
+        return f"AI分析の実行中にエラーが発生しました。APIキーが正しいか確認してください。エラー: {e}"
 
 
 # データ読み込み
@@ -349,6 +351,18 @@ st.sidebar.markdown(
         瞬ジェネ<br>AIアナライザー
     </a>
     """, unsafe_allow_html=True)
+
+# APIキー入力欄
+st.sidebar.markdown("### 設定")
+user_api_key = st.sidebar.text_input(
+    "Google API Key",
+    type="password",
+    help="Google AI Studioで取得したAPIキーを入力してください。",
+    placeholder="AIzaSy..."
+)
+if not user_api_key:
+    st.sidebar.warning("AI機能を使用するにはAPIキーが必要です")
+
 st.sidebar.markdown("---")
 
 # デフォルトのページ（URLに何もない場合）
@@ -1234,7 +1248,7 @@ if selected_analysis == "全体サマリー":
             1. 「現状の評価」として、特に注目すべき「強み」と「弱み」を箇条書きで指摘してください。
             2. 「今後の考察と改善案」として、最も優先して取り組むべき課題を1つ特定し、その理由と具体的な改善アクションを3つ提案してください。
             """
-            ai_response = generate_ai_insight(prompt, context_data)
+            ai_response = generate_ai_insight(prompt, context_data, api_key=user_api_key)
             st.markdown(ai_response)
 
         if st.button("AI分析を閉じる", key="summary_ai_close"):
@@ -1520,7 +1534,7 @@ elif selected_analysis == "スクロール分析":
         with st.spinner("AIがスクロールデータを分析中..."):
             context = f"期間: {start_date}~{end_date}\nスクロール到達率データ:\n{retention_df.to_markdown()}"
             prompt = "スクロール到達率データを基に、ユーザーの離脱ポイント（ボトルネック）を特定し、改善案を3つ提案してください。"
-            ai_response = generate_ai_insight(prompt, context)
+            ai_response = generate_ai_insight(prompt, context, api_key=user_api_key)
             st.markdown(ai_response)
 
         if st.button("AI分析を閉じる", key="scroll_ai_close"):
@@ -1805,7 +1819,7 @@ elif selected_analysis == "チャネル・広告分析":
             - パフォーマンスが低いセグメントについて、考えられる原因を考察してください。
             - パフォーマンスが高いセグメントの予算を増やすなど、具体的なアクションを提案してください。
             """
-            ai_response = generate_ai_insight(prompt, context_data)
+            ai_response = generate_ai_insight(prompt, context_data, api_key=user_api_key)
             st.markdown(ai_response)
 
         if st.button("AI分析を閉じる", key="ad_analysis_ai_close"):
@@ -2248,7 +2262,7 @@ elif selected_analysis == "A/Bテスト分析":
             - 次に取るべき具体的なステップを「勝者パターンの実装」「効果測定」「次のテスト計画」の3つの観点から提案してください。
             """
             if not ab_stats.empty and len(ab_stats) >= 2:
-                ai_response = generate_ai_insight(prompt, context_data)
+                ai_response = generate_ai_insight(prompt, context_data, api_key=user_api_key)
                 st.markdown(ai_response)
             else:
                 st.warning("比較するバリアントが2つ未満のため、詳細な分析は実行できません。")
@@ -2678,7 +2692,7 @@ elif selected_analysis == "インタラクション分析":
             - CV貢献度の高い行動を、より多くのユーザーに取ってもらうための具体的な施策を提案してください。（例：ボタンを目立たせる、配置を変えるなど）
             - 逆に、CVRリフト率が低い、またはマイナスになっている行動があれば、それがユーザーを混乱させている可能性を指摘し、その要素の必要性を見直すか、役割を明確にする改善を提案してください。
             """
-            ai_response = generate_ai_insight(prompt, context_data)
+            ai_response = generate_ai_insight(prompt, context_data, api_key=user_api_key)
             st.markdown(ai_response)
 
         if st.button("AI分析を閉じる", key="interaction_ai_close"):
@@ -2978,7 +2992,7 @@ elif selected_analysis == "動画エンゲージメント":
                 - 動画コンテンツをどのように活用すればさらにCVRを向上させられるか、具体的なアイデアを2つ提案してください。
                 - スクロール率が低い（ファーストビュー直下での離脱が多い）ページに対して、どのような改善施策が有効か提案してください。
                 """
-                ai_response = generate_ai_insight(prompt, context_data)
+                ai_response = generate_ai_insight(prompt, context_data, api_key=user_api_key)
                 st.markdown(ai_response)
             if st.button("AI分析を閉じる", key="video_scroll_ai_close"):
                 st.session_state.video_scroll_ai_open = False
@@ -3307,7 +3321,7 @@ elif selected_analysis == "時系列分析":
             - 特定した「ゴールデンタイム」をどのように活用すべきか、具体的なアクションを「広告配信」と「プロモーション」の2つの観点から提案してください。
             - 逆に、CVRが低い時間帯に対してどのようなアクションを取るべきかについても言及してください。
             """
-            ai_response = generate_ai_insight(prompt, context_data)
+            ai_response = generate_ai_insight(prompt, context_data, api_key=user_api_key)
             st.markdown(ai_response)
 
         if st.button("AI分析を閉じる", key="timeseries_ai_close"):
@@ -3426,7 +3440,7 @@ elif selected_analysis == "リアルタイムビュー":
             1. **現状の評価**: リアルタイムビューの目的を説明し、「セッション数の急増」と「セッション数の急減」がそれぞれ何を意味する可能性があるかを解説してください。
             2. **今後のアクション**: 上記の「機会の活用」と「問題の早期発見」の2つのシナリオについて、それぞれどのような具体的なアクションを取るべきかを提案してください。
             """
-            ai_response = generate_ai_insight(prompt, context_data)
+            ai_response = generate_ai_insight(prompt, context_data, api_key=user_api_key)
             st.markdown(ai_response)
 
         if st.button("AI分析を閉じる", key="realtime_ai_close"):
@@ -3798,7 +3812,7 @@ elif selected_analysis == "デモグラフィック情報":
                 - 特定したコアターゲット層に向けて、LPのメッセージやデザインをどのように最適化すべきか提案してください。
                 - 新たなターゲット層を開拓するためのアイデアがあれば1つ提案してください。
                 """
-                ai_response = generate_ai_insight(prompt, context_data)
+                ai_response = generate_ai_insight(prompt, context_data, api_key=user_api_key)
                 st.markdown(ai_response)
             if st.button("AI分析を閉じる", key="demographic_ai_close"):
                 st.session_state.demographic_ai_open = False
@@ -4173,7 +4187,7 @@ elif selected_analysis == "AIによる分析・考察":
             - **優先度別の施策**: 「優先度高：即実施すべき施策」「優先度中：A/Bテストで検証すべき施策」「優先度低：中長期的な施策」の3段階に分けて、具体的な改善アクションを複数提案してください。
             - **実施ロードマップ**: 提案した施策を3ヶ月間のタイムラインに落とし込み、期待される効果も記述してください。
             """
-            ai_response = generate_ai_insight(prompt, context_data)
+            ai_response = generate_ai_insight(prompt, context_data, api_key=user_api_key)
             st.markdown(ai_response)
 
         if st.button("AI分析を閉じる", key="ai_analysis_close"):
@@ -4874,7 +4888,7 @@ elif selected_analysis == "ファネル分析":
         with st.spinner("AIがファネルデータを分析中..."):
             context = f"期間: {start_date}~{end_date}\nファネルデータ:\n{funnel_data.to_markdown()}"
             prompt = "ファネルデータを基に、最大の離脱ポイントを特定し、改善策を提案してください。"
-            ai_response = generate_ai_insight(prompt, context)
+            ai_response = generate_ai_insight(prompt, context, api_key=user_api_key)
             st.markdown(ai_response)
 
         if st.button("AI分析を閉じる", key="funnel_ai_close"):
@@ -5050,7 +5064,7 @@ elif selected_analysis == "フォーム分析":
             ### 2. 今後の考察と改善案
             - 特定したボトルネックページについて、考えられる具体的な改善アクション案を3つ提案してください。（例：質問文の簡略化、UIの改善、入力補助機能の追加など）
             """
-            ai_response = generate_ai_insight(prompt, context_data)
+            ai_response = generate_ai_insight(prompt, context_data, api_key=user_api_key)
             st.markdown(ai_response)
 
         if st.button("AI分析を閉じる", key="shun_form_ai_close"):
