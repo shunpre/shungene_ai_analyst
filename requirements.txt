@@ -8,3 +8,4 @@ google-cloud-bigquery
 google-generativeai
 requests
 beautifulsoup4
+google-analytics-data

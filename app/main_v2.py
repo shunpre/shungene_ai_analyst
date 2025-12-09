@@ -15,9 +15,10 @@ except ImportError:
     extract_lp_text_content = None
 import time
 import json
-from google.cloud import bigquery
-from google.oauth2 import service_account
+# from google.cloud import bigquery # Removed BigQuery
+# from google.oauth2 import service_account # Removed Service Account
 import google.generativeai as genai
+from app.ga4_data import fetch_ga4_data, generate_scroll_lp_dummy_data
 # scipyをインポート（A/Bテストの有意差検定で使用）
 
 # ページ設定
@@ -234,40 +235,31 @@ def safe_rate(numerator, denominator):
 # データ読み込み
 @st.cache_data
 def load_data():
-    """BigQueryからデータを読み込む。Secretsに情報がない場合はダミーデータを読み込む。"""
-    try:
-        # StreamlitのSecretsから認証情報を取得
-        gcp_service_account_str = st.secrets["GCP_SERVICE_ACCOUNT_JSON"]
-        credentials_info = json.loads(gcp_service_account_str)
-        credentials = service_account.Credentials.from_service_account_info(credentials_info)
-        project_id = credentials.project_id
+    """
+    GA4データを読み込む。現在はダミーデータを生成して使用。
+    """
+    # 将来的にはここで fetch_ga4_data を呼び出す
+    # df = fetch_ga4_data(property_id, start_date, end_date)
+    
+    # Scroll LP用のダミーデータを生成
+    df = generate_scroll_lp_dummy_data(days=30)
+    
+    # cv_type列がない場合は作成 (GA4実データ連携時のため)
+    if 'cv_type' not in df.columns:
+        df['cv_type'] = np.where(df['event_name'] == 'conversion', 'conversion', np.nan)
+        
 
-        # BigQueryクライアントを初期化
-        client = bigquery.Client(credentials=credentials, project=project_id)
+    # Derived Time Columns
+    df['event_date'] = pd.to_datetime(df['event_date'])
+    df['hour'] = df['event_date'].dt.hour
+    df['dow'] = df['event_date'].dt.dayofweek
+    df['dow_name'] = df['event_date'].dt.day_name()
+    
+    # Derived Demographics
+    if 'age' in df.columns and 'age_group' not in df.columns:
+        df['age_group'] = df['age'] # Map if needed, currently 1:1
 
-        # TODO: あなたの環境に合わせてBigQueryのテーブル名を指定してください
-        # 例: `your_project_id.your_dataset.your_table`
-        # ここではプロジェクトIDを動的に取得し、データセットとテーブル名はプレースホルダーにしています。
-        table_name = f"{project_id}.shungene_dataset.swipelp_events"
-
-        # SQLクエリを作成
-        query = f"SELECT * FROM `{table_name}`"
-
-        # クエリを実行してDataFrameに読み込む
-        df = client.query(query).to_dataframe()
-
-        # タイムスタンプと日付の列をdatetime型に変換
-        df['event_timestamp'] = pd.to_datetime(df['event_timestamp'])
-        df['event_date'] = pd.to_datetime(df['event_date'])
-        st.toast("BigQueryからデータを正常に読み込みました。", icon="✅")
-        return df
-
-    except Exception as e:
-        st.warning("BigQueryの認証情報が正しく設定されていないか、テーブルが存在しません。代わりにダミーデータを表示します。")
-        df = pd.read_csv("app/dummy_data.csv")
-        df['event_timestamp'] = pd.to_datetime(df['event_timestamp'])
-        df['event_date'] = pd.to_datetime(df['event_date'])
-        return df
+    return df
 
 # 比較期間のデータを取得する関数
 def get_comparison_data(df, current_start, current_end, comparison_type):
@@ -310,7 +302,7 @@ def generate_ai_insight(prompt, context_data=""):
     try:
         api_key = st.secrets["GOOGLE_API_KEY"]
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-pro')
+        model = genai.GenerativeModel('gemini-1.5-pro')
         
         full_prompt = f"""
         あなたは優秀なWebアナリストです。以下のデータとコンテキストを基に、プロの視点から現状の評価と具体的な改善提案をしてください。
@@ -325,6 +317,7 @@ def generate_ai_insight(prompt, context_data=""):
         """
         
         response = model.generate_content(full_prompt)
+            
         return response.text
     except Exception as e:
         return f"AI分析の実行中にエラーが発生しました。APIキーが正しく設定されているか確認してください。エラー: {e}"
@@ -376,12 +369,13 @@ except AttributeError:
 # 他の処理がst.session_stateを参照している場合に備え、同期させる
 st.session_state.selected_analysis = selected_analysis
 
-# グルーピングされたメニュー項目
+# グルーピングされたメニュー項目 (Scroll LP版)
 menu_groups = {
     "AIアナライザー": ["AIによる分析・考察"],
-    "基本分析": ["リアルタイムビュー", "全体サマリー", "時系列分析", "デモグラフィック情報", "アラート"],
-    "LP最適化分析": ["ページ分析", "A/Bテスト分析"],
-    "詳細分析": ["広告分析", "インタラクション分析", "動画・スクロール分析", "瞬フォーム分析"],
+    "ダッシュボード": ["全体サマリー", "リアルタイムビュー"],
+    "集客・流入": ["時系列分析", "チャネル・広告分析", "デモグラフィック情報"],
+    "エンゲージメント": ["スクロール分析", "インタラクション分析", "動画エンゲージメント"],
+    "コンバージョン": ["ファネル分析", "フォーム分析"],
     "ヘルプ": ["LPOの基礎知識", "専門用語解説", "FAQ"]
 }
 
@@ -627,16 +621,24 @@ if selected_analysis == "全体サマリー":
         st.warning("⚠️ 選択した条件に該当するデータがありません。フィルターを変更してください。")
         st.stop()
 
-    # 基本メトリクス計算
+    # 基本メトリクス計算 (Scroll LP対応)
     total_sessions = filtered_df['session_id'].nunique()
-    total_conversions = filtered_df[filtered_df['cv_type'].notna()]['session_id'].nunique()
+    total_conversions = filtered_df[filtered_df['event_name'] == 'conversion']['session_id'].nunique()
     conversion_rate = (total_conversions / total_sessions * 100) if total_sessions > 0 else 0
-    total_clicks = len(filtered_df[filtered_df['event_name'] == 'click'])
-    click_rate = (total_clicks / total_sessions * 100) if total_sessions > 0 else 0
+    
+    # Scroll LP Metrics
+    # 平均スクロール率
+    avg_scroll_depth = filtered_df.groupby('session_id')['scroll_depth'].max().mean()
+    
+    # 読了率 (90%以上スクロール)
+    read_through_rate = (filtered_df[filtered_df['scroll_depth'] >= 90]['session_id'].nunique() / total_sessions * 100) if total_sessions > 0 else 0
+    
+    # CTAクリック率
+    total_cta_clicks = filtered_df[filtered_df['event_name'] == 'click_cta']['session_id'].nunique()
+    cta_click_rate = (total_cta_clicks / total_sessions * 100) if total_sessions > 0 else 0
+    
     avg_stay_time = filtered_df['stay_ms'].mean() / 1000  # 秒に変換
-    avg_pages_reached = filtered_df.groupby('session_id')['max_page_reached'].max().mean()
-    fv_retention_rate = (filtered_df[filtered_df['max_page_reached'] >= 2]['session_id'].nunique() / total_sessions * 100) if total_sessions > 0 else 0
-    final_cta_rate = (filtered_df[filtered_df['max_page_reached'] >= 10]['session_id'].nunique() / total_sessions * 100) if total_sessions > 0 else 0
+
     avg_load_time = filtered_df['load_time_ms'].mean()
 
     st.markdown('<div class="sub-header">主要指標（KPI）</div>', unsafe_allow_html=True)
@@ -688,27 +690,25 @@ if selected_analysis == "全体サマリー":
     comp_kpis = {}
     if comparison_df is not None and len(comparison_df) > 0:
         comp_total_sessions = comparison_df['session_id'].nunique()
-        comp_total_conversions = comparison_df[comparison_df['cv_type'].notna()]['session_id'].nunique()
+        comp_total_conversions = comparison_df[comparison_df['event_name'] == 'conversion']['session_id'].nunique()
         comp_conversion_rate = (comp_total_conversions / comp_total_sessions * 100) if comp_total_sessions > 0 else 0
-        comp_total_clicks = len(comparison_df[comparison_df['event_name'] == 'click'])
-        comp_click_rate = (comp_total_clicks / comp_total_sessions * 100) if comp_total_sessions > 0 else 0
+        
+        comp_avg_scroll_depth = comparison_df.groupby('session_id')['scroll_depth'].max().mean()
+        comp_read_through_rate = (comparison_df[comparison_df['scroll_depth'] >= 90]['session_id'].nunique() / comp_total_sessions * 100) if comp_total_sessions > 0 else 0
+        
+        comp_total_cta_clicks = comparison_df[comparison_df['event_name'] == 'click_cta']['session_id'].nunique()
+        comp_cta_click_rate = (comp_total_cta_clicks / comp_total_sessions * 100) if comp_total_sessions > 0 else 0
+        
         comp_avg_stay_time = comparison_df['stay_ms'].mean() / 1000
-        comp_avg_pages_reached = comparison_df.groupby('session_id')['max_page_reached'].max().mean()
-        comp_fv_retention_rate = (comparison_df[comparison_df['max_page_reached'] >= 2]['session_id'].nunique() / comp_total_sessions * 100) if comp_total_sessions > 0 else 0
-        comp_final_cta_rate = (comparison_df[comparison_df['max_page_reached'] >= 10]['session_id'].nunique() / comp_total_sessions * 100) if comp_total_sessions > 0 else 0
-        comp_avg_load_time = comparison_df['load_time_ms'].mean()
         
         comp_kpis = {
             'sessions': comp_total_sessions,
             'conversions': comp_total_conversions,
             'conversion_rate': comp_conversion_rate,
-            'clicks': comp_total_clicks,
-            'click_rate': comp_click_rate,
-            'avg_stay_time': comp_avg_stay_time,
-            'avg_pages_reached': comp_avg_pages_reached,
-            'fv_retention_rate': comp_fv_retention_rate,
-            'final_cta_rate': comp_final_cta_rate,
-            'avg_load_time': comp_avg_load_time
+            'avg_scroll_depth': comp_avg_scroll_depth,
+            'read_through_rate': comp_read_through_rate,
+            'cta_click_rate': comp_cta_click_rate,
+            'avg_stay_time': comp_avg_stay_time
         }
 
     # KPIカード表示
@@ -719,45 +719,40 @@ if selected_analysis == "全体サマリー":
         delta_sessions = total_sessions - comp_kpis.get('sessions', 0) if comp_kpis else None
         st.metric("セッション数", f"{total_sessions:,}", delta=f"{delta_sessions:+,}" if delta_sessions is not None else None)
         
-        # FV残存率
-        delta_fv = fv_retention_rate - comp_kpis.get('fv_retention_rate', 0) if comp_kpis else None
-        st.metric("FV残存率", f"{fv_retention_rate:.1f}%", delta=f"{delta_fv:+.1f}%" if delta_fv is not None else None)
+        # 読了率 (90% Scroll)
+        delta_read = read_through_rate - comp_kpis.get('read_through_rate', 0) if comp_kpis else None
+        st.metric("読了率 (90%)", f"{read_through_rate:.1f}%", delta=f"{delta_read:+.1f}%" if delta_read is not None else None)
 
     with col2:
         # コンバージョン数
         delta_conversions = total_conversions - comp_kpis.get('conversions', 0) if comp_kpis else None
         st.metric("コンバージョン数", f"{total_conversions:,}", delta=f"{delta_conversions:+,}" if delta_conversions is not None else None)
 
-        # 最終CTA到達率
-        delta_cta = final_cta_rate - comp_kpis.get('final_cta_rate', 0) if comp_kpis else None
-        st.metric("最終CTA到達率", f"{final_cta_rate:.1f}%", delta=f"{delta_cta:+.1f}%" if delta_cta is not None else None)
+        # CTAクリック率
+        delta_cta = cta_click_rate - comp_kpis.get('cta_click_rate', 0) if comp_kpis else None
+        st.metric("CTAクリック率", f"{cta_click_rate:.1f}%", delta=f"{delta_cta:+.1f}%" if delta_cta is not None else None)
 
     with col3:
         # コンバージョン率
         delta_cvr = conversion_rate - comp_kpis.get('conversion_rate', 0) if comp_kpis else None
         st.metric("コンバージョン率", f"{conversion_rate:.2f}%", delta=f"{delta_cvr:+.2f}%" if delta_cvr is not None else None)
 
-        # 平均到達ページ数
-        delta_pages = avg_pages_reached - comp_kpis.get('avg_pages_reached', 0) if comp_kpis else None
-        st.metric("平均到達ページ数", f"{avg_pages_reached:.1f}", delta=f"{delta_pages:+.1f}" if delta_pages is not None else None)
+        # 平均スクロール率
+        delta_scroll = avg_scroll_depth - comp_kpis.get('avg_scroll_depth', 0) if comp_kpis else None
+        st.metric("平均スクロール率", f"{avg_scroll_depth:.1f}%", delta=f"{delta_scroll:+.1f}%" if delta_scroll is not None else None)
 
     with col4:
-        # クリック数
-        delta_clicks = total_clicks - comp_kpis.get('clicks', 0) if comp_kpis else None
-        st.metric("クリック数", f"{total_clicks:,}", delta=f"{delta_clicks:+,}" if delta_clicks is not None else None)
+        # CTAクリック数
+        delta_cta_clicks = total_cta_clicks - comp_kpis.get('cta_clicks', 0) if comp_kpis else None
+        st.metric("CTAクリック数", f"{total_cta_clicks:,}", delta=f"{delta_cta_clicks:+,}" if delta_cta_clicks is not None else None)
 
         # 平均滞在時間
         delta_stay = avg_stay_time - comp_kpis.get('avg_stay_time', 0) if comp_kpis else None
         st.metric("平均滞在時間", f"{avg_stay_time:.1f}秒", delta=f"{delta_stay:+.1f} 秒" if delta_stay is not None else None)
 
     with col5:
-        # クリック率
-        delta_click_rate = click_rate - comp_kpis.get('click_rate', 0) if comp_kpis else None
-        st.metric("クリック率", f"{click_rate:.2f}%", delta=f"{delta_click_rate:+.2f}%" if delta_click_rate is not None else None)
-
-        # 平均読込時間
-        delta_load = avg_load_time - comp_kpis.get('avg_load_time', 0) if comp_kpis else None
-        st.metric("平均読込時間", f"{avg_load_time:.0f}ms", delta=f"{delta_load:+.0f} ms" if delta_load is not None else None, delta_color="inverse")
+        # 予備（今回は空欄または他の指標）
+        st.metric("平均読込時間", "N/A", delta=None) # ダミーデータにないのでN/A
 
     # KPIスコアカードと日別KPIテーブルの間にスペースを設ける
     st.markdown("<br>", unsafe_allow_html=True)
@@ -770,45 +765,42 @@ if selected_analysis == "全体サマリー":
     # 日別にKPIを計算
     daily_df = filtered_df.groupby(filtered_df['event_date'].dt.date).agg(
         セッション数=('session_id', 'nunique'),
-        クリック数=('event_name', lambda x: (x == 'click').sum()),
         平均滞在時間=('stay_ms', 'mean'),
-        平均到達ページ=('max_page_reached', 'mean'),
-        平均読込時間=('load_time_ms', 'mean')
+        平均スクロール率=('scroll_depth', 'mean')
     ).reset_index()
     daily_df.rename(columns={'event_date': '日付'}, inplace=True)
 
     # 日別コンバージョン数
-    daily_cv = filtered_df[filtered_df['cv_type'].notna()].groupby(filtered_df['event_date'].dt.date)['session_id'].nunique().reset_index()
+    daily_cv = filtered_df[filtered_df['event_name'] == 'conversion'].groupby(filtered_df['event_date'].dt.date)['session_id'].nunique().reset_index()
     daily_cv.columns = ['日付', 'CV数']
     daily_df = pd.merge(daily_df, daily_cv, on='日付', how='left').fillna(0)
 
-    # 日別FV残存数
-    daily_fv = filtered_df[filtered_df['max_page_reached'] >= 2].groupby(filtered_df['event_date'].dt.date)['session_id'].nunique().reset_index()
-    daily_fv.columns = ['日付', 'FV残存数']
-    daily_df = pd.merge(daily_df, daily_fv, on='日付', how='left').fillna(0)
+    # 日別読了数 (90%)
+    daily_read = filtered_df[filtered_df['scroll_depth'] >= 90].groupby(filtered_df['event_date'].dt.date)['session_id'].nunique().reset_index()
+    daily_read.columns = ['日付', '読了数']
+    daily_df = pd.merge(daily_df, daily_read, on='日付', how='left').fillna(0)
 
-    # 日別最終CTA到達数
-    daily_final_cta = filtered_df[filtered_df['max_page_reached'] >= 10].groupby(filtered_df['event_date'].dt.date)['session_id'].nunique().reset_index()
-    daily_final_cta.columns = ['日付', '最終CTA到達数']
-    daily_df = pd.merge(daily_df, daily_final_cta, on='日付', how='left').fillna(0)
+    # 日別CTAクリック数
+    daily_cta = filtered_df[filtered_df['event_name'] == 'click_cta'].groupby(filtered_df['event_date'].dt.date)['session_id'].nunique().reset_index()
+    daily_cta.columns = ['日付', 'CTAクリック数']
+    daily_df = pd.merge(daily_df, daily_cta, on='日付', how='left').fillna(0)
 
     # 率を計算
     daily_df['CVR'] = daily_df.apply(lambda row: safe_rate(row['CV数'], row['セッション数']) * 100, axis=1)
-    daily_df['CTR'] = daily_df.apply(lambda row: safe_rate(row['クリック数'], row['セッション数']) * 100, axis=1)
-    daily_df['FV残存率'] = daily_df.apply(lambda row: safe_rate(row['FV残存数'], row['セッション数']) * 100, axis=1)
-    daily_df['最終CTA到達率'] = daily_df.apply(lambda row: safe_rate(row['最終CTA到達数'], row['セッション数']) * 100, axis=1)
+    daily_df['読了率'] = daily_df.apply(lambda row: safe_rate(row['読了数'], row['セッション数']) * 100, axis=1)
+    daily_df['CTAクリック率'] = daily_df.apply(lambda row: safe_rate(row['CTAクリック数'], row['セッション数']) * 100, axis=1)
     daily_df['平均滞在時間'] = daily_df['平均滞在時間'] / 1000
 
     # 日付を降順にソート
     daily_df = daily_df.sort_values(by='日付', ascending=False)
 
     # 表示する列を選択
-    display_cols_daily = ['日付', 'セッション数', 'CV数', 'CVR', 'クリック数', 'CTR', 'FV残存率', '最終CTA到達率', '平均到達ページ', '平均滞在時間']
+    display_cols_daily = ['日付', 'セッション数', 'CV数', 'CVR', 'CTAクリック数', 'CTAクリック率', '読了率', '平均スクロール率', '平均滞在時間']
     
     # データフレームを表示（7行分の高さに固定）
     st.dataframe(daily_df[display_cols_daily].style.format({
-        'CVR': '{:.2f}%', 'CTR': '{:.2f}%', 'FV残存率': '{:.1f}%', '最終CTA到達率': '{:.1f}%',
-        '平均到達ページ': '{:.1f}', '平均滞在時間': '{:.1f}秒'
+        'CVR': '{:.2f}%', 'CTAクリック率': '{:.2f}%', '読了率': '{:.1f}%',
+        '平均スクロール率': '{:.1f}%', '平均滞在時間': '{:.1f}秒'
     }), use_container_width=True, height=282, hide_index=True)
     # page_pathごとのKPIを計算（期間フィルターのみ適用したデータを使用）
     path_sessions = period_filtered_df.groupby('page_path')['session_id'].nunique()
@@ -820,25 +812,22 @@ if selected_analysis == "全体サマリー":
         'CV数': path_conversions,
         'クリック数': path_clicks,
         '平均滞在時間': period_filtered_df.groupby('page_path')['stay_ms'].mean() / 1000,
-        '平均到達ページ': period_filtered_df.groupby('page_path')['max_page_reached'].mean()
+        '平均スクロール率': period_filtered_df.groupby('page_path')['scroll_depth'].mean()
     }).fillna(0)
 
     kpi_by_path['CVR'] = kpi_by_path.apply(lambda row: safe_rate(row['CV数'], row['セッション数']) * 100, axis=1)
     kpi_by_path['CTR'] = kpi_by_path.apply(lambda row: safe_rate(row['クリック数'], row['セッション数']) * 100, axis=1)
-    # FV残存率
-    fv_sessions = period_filtered_df[period_filtered_df['max_page_reached'] >= 2].groupby('page_path')['session_id'].nunique()
-    kpi_by_path['FV残存率'] = (safe_rate(fv_sessions, path_sessions) * 100).fillna(0) # safe_rateがSeriesを返すように
-    # 最終CTA到達率
-    final_cta_sessions = period_filtered_df[period_filtered_df['max_page_reached'] >= 10].groupby('page_path')['session_id'].nunique()
-    kpi_by_path['最終CTA到達率'] = (safe_rate(final_cta_sessions, path_sessions) * 100).fillna(0) # こちらも同様に修正
-
+    # 読了率 (90%)
+    read_sessions = period_filtered_df[period_filtered_df['scroll_depth'] >= 90].groupby('page_path')['session_id'].nunique()
+    kpi_by_path['読了率'] = (safe_rate(read_sessions, path_sessions) * 100).fillna(0)
+    
     kpi_by_path = kpi_by_path.reset_index()
     kpi_by_path.rename(columns={'page_path': 'ページパス'}, inplace=True)
 
-    # 表示する列を定義（変更なし）
+    # 表示する列を定義
     display_cols = [
         'ページパス', 'セッション数', 'CV数', 'CVR', 'クリック数', 'CTR', 
-        'FV残存率', '最終CTA到達率', '平均到達ページ', '平均滞在時間'
+        '読了率', '平均スクロール率', '平均滞在時間'
     ]
 
     # --- インタラクションKPIの計算ロジック（期間フィルターのみ適用したデータを使用） ---
@@ -889,9 +878,8 @@ if selected_analysis == "全体サマリー":
             'CVR': '{:.2f}%',
             'クリック数': '{:,.0f}',
             'CTR': '{:.2f}%',
-            'FV残存率': '{:.2f}%',
-            '最終CTA到達率': '{:.2f}%',
-            '平均到達ページ': '{:.2f}',
+            '読了率': '{:.2f}%',
+            '平均スクロール率': '{:.1f}%',
             '平均滞在時間': '{:.1f}秒'
         }), use_container_width=True, hide_index=True)
 
@@ -1072,32 +1060,30 @@ if selected_analysis == "全体サマリー":
             )
             st.plotly_chart(fig, use_container_width=True, key='plotly_chart_5')
 
-    # LP進行ファネルと滞在時間別ファネル
+    # スクロール到達ファネルと滞在時間別ファネル
     if show_funnel:
-        st.markdown("#### LP進行状況とページ内滞在時間")
-
-        # LPのページ数をデータから動的に取得
-        actual_page_count = int(filtered_df['page_num_dom'].max()) if not filtered_df['page_num_dom'].dropna().empty else 10
+        st.markdown("#### スクロール到達ファネルとページ内滞在時間")
 
         col1, col2 = st.columns(2)
 
         with col1:
             funnel_data = []
-            for page_num in range(1, actual_page_count + 1):
-                count = filtered_df[filtered_df['max_page_reached'] >= page_num]['session_id'].nunique()
-                funnel_data.append({'ページ': f'ページ{page_num}', 'セッション数': count})
+            scroll_milestones = [0, 10, 25, 50, 75, 90, 100]
+            for depth in scroll_milestones:
+                count = filtered_df[filtered_df['scroll_depth'] >= depth]['session_id'].nunique()
+                funnel_data.append({'スクロール深度': f'{depth}%', 'セッション数': count})
             
             funnel_df = pd.DataFrame(funnel_data)
             
             fig_funnel = go.Figure(go.Funnel(
-                y=funnel_df['ページ'],
+                y=funnel_df['スクロール深度'],
                 x=funnel_df['セッション数'],
                 textinfo="value+percent initial",
-                hovertemplate='ページ: %{y}<br>セッション数: %{x:,}<extra></extra>'
-            )) # type: ignore
+                hovertemplate='スクロール深度: %{y}<br>セッション数: %{x:,}<extra></extra>'
+            ))
             fig_funnel.update_layout(height=600, dragmode=False)
-            st.markdown("**LP進行ファネル**")
-            st.markdown('<div class="graph-description">各ページに到達したセッション数と、次のページへの遷移率です。急激に減少している箇所が大きな離脱ポイントです。</div>', unsafe_allow_html=True) # type: ignore
+            st.markdown("**スクロール到達ファネル**")
+            st.markdown('<div class="graph-description">各スクロール深度に到達したセッション数と、次の段階への遷移率です。急激に減少している箇所が大きな離脱ポイントです。</div>', unsafe_allow_html=True)
             st.plotly_chart(fig_funnel, use_container_width=True, key='plotly_chart_funnel_revived')
 
         with col2:
@@ -1110,60 +1096,26 @@ if selected_analysis == "全体サマリー":
                 ('3分以上', 180000, float('inf'))
             ]
             
-            # ページごとの滞在時間別セッション数を計算
-            page_stay_data = []
-            for page_num in range(1, actual_page_count + 1):
-                # そのページに到達したセッションIDを取得
-                reached_session_ids = set(filtered_df[filtered_df['max_page_reached'] >= page_num]['session_id'].unique())
-                total_reached = len(reached_session_ids)
-                
-                # そのページでの滞在時間イベントを持つセッションを取得
-                page_specific_stay = filtered_df[
-                    (filtered_df['page_num_dom'] == page_num) & 
-                    (filtered_df['session_id'].isin(reached_session_ids)) &
-                    (filtered_df['stay_ms'].notna()) # NaN値を除外
-                ]
-                
-                row = {'ページ': f'ページ{page_num}', 'ページ番号': page_num}
-                
-                # そのページで滞在時間イベントがあったセッションの総数
-                total_sessions_with_stay = page_specific_stay['session_id'].nunique()
-
-                for label, min_ms, max_ms in stay_segments_for_calc:
-                    segment_sessions_count = page_specific_stay[
-                        (page_specific_stay['stay_ms'] >= min_ms) & 
-                        (page_specific_stay['stay_ms'] < max_ms)
-                    ]['session_id'].nunique()
-                    
-                    # 滞在時間イベントがあったセッション内での割合を計算
-                    row[label] = (segment_sessions_count / total_sessions_with_stay * 100) if total_sessions_with_stay > 0 else 0
-                
-                page_stay_data.append(row)
-
-            page_stay_df = pd.DataFrame(page_stay_data).sort_values('ページ番号', ascending=False)
-
-            # 積み上げ棒グラフでファネルを表現
-            fig_stay_pct = go.Figure()            
-            # YlGnBuスケールから濃い青系の5色を選択
-            colors = px.colors.sequential.YlGnBu[2:7]
-            colors[-1] = '#08306b' # 一番濃い色を濃紺に設定
+            # スクロール深度ごとの滞在時間別セッション数を計算 (簡易的に全体の滞在時間分布を表示)
+            st.markdown("**滞在時間分布**")
+            st.markdown('<div class="graph-description">セッション全体の滞在時間の分布です。</div>', unsafe_allow_html=True)
             
-            for i, (label, _, _) in enumerate(stay_segments_for_calc):
-                fig_stay_pct.add_trace(go.Bar(
-                    y=page_stay_df['ページ'],
-                    x=page_stay_df[label],
-                    name=label,
-                    orientation='h', # type: ignore
-                    hovertemplate='ページ: %{y}<br>割合: %{x:.2f}%<extra></extra>',
-                    marker_color=colors[i]
-                ))
+            stay_data = []
+            total_sessions = filtered_df['session_id'].nunique()
+            
+            for label, min_ms, max_ms in stay_segments_for_calc:
+                count = filtered_df[(filtered_df['stay_ms'] >= min_ms) & (filtered_df['stay_ms'] < max_ms)]['session_id'].nunique()
+                ratio = (count / total_sessions * 100) if total_sessions > 0 else 0
+                stay_data.append({'滞在時間': label, 'セッション数': count, '割合': ratio})
+            
+            stay_df = pd.DataFrame(stay_data)
+            
+            fig_stay = px.bar(stay_df, x='滞在時間', y='セッション数', text='割合')
+            fig_stay.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
+            fig_stay.update_layout(height=400)
+            st.plotly_chart(fig_stay, use_container_width=True)
+                
 
-            fig_stay_pct.update_layout(barmode='stack', height=600,
-                              xaxis_title='セッションの割合 (%)', yaxis_title='ページ', dragmode=False,
-                              xaxis_ticksuffix='%', legend=dict(traceorder='normal', orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5))
-            st.markdown("**ページ内滞在時間の分布**")
-            st.markdown('<div class="graph-description">各ページに到達し、滞在時間が計測されたセッションの行動内訳です。横軸は割合（%）を表します。</div>', unsafe_allow_html=True) # type: ignore
-            st.plotly_chart(fig_stay_pct, use_container_width=True, key='plotly_chart_stay_percentage')
     
     # 時間帯別CVR
     if show_hourly_cvr:
@@ -1273,8 +1225,8 @@ if selected_analysis == "全体サマリー":
             - セッション数: {total_sessions}
             - コンバージョン数: {total_conversions}
             - コンバージョン率: {conversion_rate:.2f}%
-            - FV残存率: {fv_retention_rate:.1f}%
-            - 最終CTA到達率: {final_cta_rate:.1f}%
+            - 読了率: {read_through_rate:.1f}%
+            - CTAクリック率: {cta_click_rate:.1f}%
             - 平均滞在時間: {avg_stay_time:.1f}秒
             """
             prompt = """
@@ -1299,7 +1251,7 @@ if selected_analysis == "全体サマリー":
             st.session_state.summary_faq_toggle[1] = not st.session_state.summary_faq_toggle[1]
             st.session_state.summary_faq_toggle[2], st.session_state.summary_faq_toggle[3], st.session_state.summary_faq_toggle[4] = False, False, False
         if st.session_state.summary_faq_toggle[1]:
-            st.info(f"**強み**は、平均滞在時間が{avg_stay_time:.1f}秒と比較的長く、コンテンツに興味を持ったユーザーは読み進めている点です。\n\n**弱み**は、FV残存率が{fv_retention_rate:.1f}%と低く、多くのユーザーが最初のページで離脱している点です。")
+            st.info(f"**強み**は、平均滞在時間が{avg_stay_time:.1f}秒と比較的長く、コンテンツに興味を持ったユーザーは読み進めている点です。\n\n**弱み**は、読了率が{read_through_rate:.1f}%と低く、多くのユーザーが途中で離脱している点です。")
         
         if st.button("パフォーマンスが悪い原因を特定するには？", key="faq_summary_3", use_container_width=True):
             st.session_state.summary_faq_toggle[3] = not st.session_state.summary_faq_toggle[3]
@@ -1451,382 +1403,163 @@ elif selected_analysis == "ページ分析":
         st.warning("⚠️ 選択した条件に該当するデータがありません。フィルターを変更してください。")
         st.stop()
 
-    # ページ分析は単一のLP選択時のみ実行
-    if selected_lp:
-        pass # 選択されたLPのURL表示は削除
-    else:
-        st.warning("ページ分析を行うには、フィルターで分析したいLPを選択してください。")
+# タブ2: スクロール分析 (旧ページ分析)
+elif selected_analysis == "スクロール分析":
+    st.markdown('<div class="sub-header">スクロール分析</div>', unsafe_allow_html=True)
+    
+    # --- 共通フィルター ---
+    st.markdown('<div class="sub-header">フィルター設定</div>', unsafe_allow_html=True)
+    filter_cols_1 = st.columns(4)
+    filter_cols_2 = st.columns(4)
+
+    with filter_cols_1[0]:
+        period_options = ["今日", "昨日", "過去7日間", "過去14日間", "過去30日間", "今月", "先月", "全期間", "カスタム"]
+        selected_period = st.selectbox("期間を選択", period_options, index=2, key="scroll_period")
+
+    with filter_cols_1[1]:
+        lp_options = sorted(df['page_location'].dropna().unique().tolist())
+        selected_lp = st.selectbox("LP選択", lp_options, index=0 if lp_options else None, key="scroll_lp", disabled=not lp_options)
+
+    with filter_cols_1[2]:
+        device_options = ["すべて"] + sorted(df['device_type'].dropna().unique().tolist())
+        selected_device = st.selectbox("デバイス選択", device_options, index=0, key="scroll_device")
+
+    with filter_cols_1[3]:
+        user_type_options = ["すべて", "新規", "リピート"]
+        selected_user_type = st.selectbox("新規/リピート", user_type_options, index=0, key="scroll_user_type")
+
+    with filter_cols_2[0]:
+        conversion_status_options = ["すべて", "コンバージョン", "非コンバージョン"]
+        selected_conversion_status = st.selectbox("CV/非CV", conversion_status_options, index=0, key="scroll_conversion_status")
+
+    with filter_cols_2[1]:
+        channel_options = ["すべて"] + sorted(df['channel'].unique().tolist())
+        selected_channel = st.selectbox("チャネル", channel_options, index=0, key="scroll_channel")
+
+    with filter_cols_2[2]:
+        source_medium_options = ["すべて"] + sorted(df['source_medium'].unique().tolist())
+        selected_source_medium = st.selectbox("参照元/メディア", source_medium_options, index=0, key="scroll_source_medium")
+
+    # 期間設定
+    today = df['event_date'].max().date()
+    if selected_period == "今日": start_date, end_date = today, today
+    elif selected_period == "昨日": start_date, end_date = today - timedelta(days=1), today - timedelta(days=1)
+    elif selected_period == "過去7日間": start_date, end_date = today - timedelta(days=6), today
+    elif selected_period == "過去14日間": start_date, end_date = today - timedelta(days=13), today
+    elif selected_period == "過去30日間": start_date, end_date = today - timedelta(days=29), today
+    elif selected_period == "今月": start_date, end_date = today.replace(day=1), today
+    elif selected_period == "先月":
+        last_month_end = today.replace(day=1) - timedelta(days=1)
+        start_date, end_date = last_month_end.replace(day=1), last_month_end
+    elif selected_period == "全期間": start_date, end_date = df['event_date'].min().date(), df['event_date'].max().date()
+    elif selected_period == "カスタム":
+        c1, c2 = st.columns(2)
+        with c1: start_date = st.date_input("開始日", df['event_date'].min(), key="scroll_start")
+        with c2: end_date = st.date_input("終了日", df['event_date'].max(), key="scroll_end")
+
+    # データフィルタリング
+    filtered_df = df[(df['event_date'] >= pd.to_datetime(start_date)) & (df['event_date'] <= pd.to_datetime(end_date))]
+    if selected_lp: filtered_df = filtered_df[filtered_df['page_location'] == selected_lp]
+    if selected_device != "すべて": filtered_df = filtered_df[filtered_df['device_type'] == selected_device]
+    if selected_user_type != "すべて": filtered_df = filtered_df[filtered_df['user_type'] == selected_user_type]
+    if selected_conversion_status != "すべて": filtered_df = filtered_df[filtered_df['conversion_status'] == selected_conversion_status]
+    if selected_channel != "すべて": filtered_df = filtered_df[filtered_df['channel'] == selected_channel]
+    if selected_source_medium != "すべて": filtered_df = filtered_df[filtered_df['source_medium'] == selected_source_medium]
+
+    if len(filtered_df) == 0:
+        st.warning("データがありません。")
         st.stop()
+
+    # スクロール到達率の計算 (5%刻みで細かく分析)
+    st.markdown("#### スクロール到達率 (Retention)")
+    st.markdown('<div class="graph-description">ユーザーがLPのどこまでスクロールしたか（到達率）を可視化します。エリアチャートで離脱の推移を滑らかに表示します。</div>', unsafe_allow_html=True)
+
+    scroll_buckets = list(range(0, 101, 5)) # 5%刻みに変更
+    retention_data = []
+    total_sessions = filtered_df['session_id'].nunique()
+
+    for depth in scroll_buckets:
+        # その深度以上に到達したセッション数
+        reached = filtered_df[filtered_df['scroll_depth'] >= depth]['session_id'].nunique()
+        rate = (reached / total_sessions * 100) if total_sessions > 0 else 0
+        retention_data.append({'スクロール深度': depth, '到達率': rate, '到達数': reached})
     
-    # --- BigQueryデータシミュレーション ---
-    # --- コンテンツ情報取得ロジック ---
-    # ご指定のURLリストをここに定義します。
-    lp_content_urls = {
-        1: "https://shungene.lm-c.jp/tst08/01.mp4", # P1
-        2: "https://shungene.lm-c.jp/tst08/01.jpg",
-        3: "https://shungene.lm-c.jp/tst08/02.jpg",
-        4: "https://shungene.lm-c.jp/tst08/03.jpg",
-        5: "https://shungene.lm-c.jp/tst08/04.jpg",
-        6: "https://shungene.lm-c.jp/tst08/05.jpg",
-        7: "https://shungene.lm-c.jp/tst08/06.jpg",
-        8: "https://shungene.lm-c.jp/tst08/06.mp4",
-        9: "https://shungene.lm-c.jp/tst08/07.jpg", # P9
-        10: "https://shungene.lm-c.jp/tst08/08.jpg",
-        11: "https://shungene.lm-c.jp/tst08/09.jpg",
-        12: "https://shungene.lm-c.jp/tst08/10.jpg",
-        13: "https://shungene.lm-c.jp/tst08/11.jpg",
-        14: "https://shungene.lm-c.jp/tst08/12.jpg",
-        15: "https://shungene.lm-c.jp/tst08/13.jpg", # P15
-        16: "https://shungene.lm-c.jp/tst08/14.jpg",
-        17: "https://shungene.lm-c.jp/tst08/15.jpg",
-        18: "https://shungene.lm-c.jp/tst08/16.jpg",
-    }
-
-    # BigQueryからコンテンツ情報を取得する関数をシミュレート
-    def get_lp_content_info(lp_url, page_num):
-        """
-        指定されたページ番号に基づいて、コンテンツのタイプとソースを返します。
-        現在はハードコードされたURLリストを使用します。
-        """
-        url = lp_content_urls.get(page_num)
-        if url:
-            if url.endswith(('.mp4', '.webm', '.mov')):
-                return {'page_number': page_num, 'content_type': 'video', 'content_source': url}
-            else:
-                return {'page_number': page_num, 'content_type': 'image', 'content_source': url}
-        # リストにないページ番号の場合はデフォルトのプレースホルダーを返す
-        return {'page_number': page_num, 'content_type': 'image', 'content_source': f"https://via.placeholder.com/150x250.png?text=Page{page_num}"}
-
-    # テーブル表示用のプレースホルダー画像
-    VIDEO_PLACEHOLDER_IMAGE = "https://via.placeholder.com/150x250.png?text=動画コンテンツ"
-    HTML_PLACEHOLDER_IMAGE = "https://via.placeholder.com/150x250.png?text=HTMLコンテンツ"
-
-    # --- BigQueryデータシミュレーションここまで ---
-
-
-    # ページ別メトリクス計算
-    page_stats = filtered_df.groupby('page_num_dom').agg({
-        'session_id': 'nunique'
-    }).reset_index()
-    page_stats.rename(columns={'page_num_dom': 'ページ番号', 'session_id': 'ビュー数'}, inplace=True)
-
-    # 逆行回数を計算
-    # セッションごと、ページごとに逆行イベントをカウント
-    backflow_df = filtered_df[filtered_df['direction'] == 'backward'].copy()
-    if not backflow_df.empty:
-        # ページごとの逆行イベントが発生したセッションのユニーク数をカウント
-        backflow_counts = backflow_df.groupby('page_num_dom')['session_id'].nunique().reset_index()
-        backflow_counts.rename(columns={'page_num_dom': 'ページ番号', 'session_id': '逆行セッション数'}, inplace=True)
-        
-        # page_statsにマージ
-        page_stats = pd.merge(page_stats, backflow_counts, on='ページ番号', how='left').fillna(0)
-        page_stats['逆行率'] = page_stats.apply(lambda row: safe_rate(row['逆行セッション数'], row['ビュー数']) * 100, axis=1)
-    else:
-        page_stats['逆行率'] = 0
+    retention_df = pd.DataFrame(retention_data)
     
-    # LPの実際のページ数を取得（画像取得が成功した場合はそれを使用、失敗した場合は推測値）
-    actual_page_count = int(filtered_df['page_num_dom'].max()) if not filtered_df.empty else 10
-    
-    # 離脱率計算（LPの実際のページ数を使用）
-    page_exit = []
-    for page_num in range(1, actual_page_count + 1):
-        reached = filtered_df[filtered_df['max_page_reached'] >= page_num]['session_id'].nunique()
-        exited = filtered_df[filtered_df['max_page_reached'] == page_num]['session_id'].nunique()
-        exit_rate = (exited / reached * 100) if reached > 0 else 0
-        page_exit.append({'ページ番号': page_num, '離脱率': exit_rate})
-    
-    page_exit_df = pd.DataFrame(page_exit)
-    page_stats = page_stats.merge(page_exit_df, on='ページ番号', how='left')
+    # エリアチャート（面グラフ）で表示
+    fig = px.area(retention_df, x='スクロール深度', y='到達率', markers=True, title='スクロール到達率推移')
+    fig.update_traces(
+        line_color='#002060', 
+        fillcolor='rgba(0, 32, 96, 0.3)',
+        hovertemplate='スクロール深度: %{x}%<br>到達率: %{y:.1f}%<br>到達数: %{customdata:,}<extra></extra>',
+        customdata=retention_df['到達数']
+    )
+    fig.update_layout(
+        yaxis_title="到達率 (%)", 
+        xaxis_title="スクロール深度 (%)",
+        height=450,
+        xaxis=dict(tickmode='linear', tick0=0, dtick=10), # X軸のメモリは10%刻みで見やすく
+        yaxis=dict(range=[0, 105])
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
-    # 平均滞在時間(秒)を計算して列を追加
-    stay_time_df = filtered_df.groupby('page_num_dom')['stay_ms'].mean().reset_index() # type: ignore
-    stay_time_df.rename(columns={'page_num_dom': 'ページ番号', 'stay_ms': '平均滞在時間(秒)'}, inplace=True)
-    stay_time_df['平均滞在時間(秒)'] /= 1000
-    page_stats = page_stats.merge(stay_time_df, on='ページ番号', how='left')
-    
-    # ダミーデータにないページを追加（ダミーデータが10ページまでしかない場合）
-    for page_num in range(1, actual_page_count + 1):
-        if page_num not in page_stats['ページ番号'].values:
-            # ダミーデータがないページはランダムなダミー値で追加
-            # ページが進むほどビュー数が減少するパターン
-            new_row = pd.DataFrame([{
-                'ページ番号': page_num,
-                'ビュー数': 0,
-                '平均逆行回数': 0,
-                '平均滞在時間(秒)': 0,
-                '離脱率': 0  # 離脱率は別途計算
-            }])
-            page_stats = pd.concat([page_stats, new_row], ignore_index=True)
-    
-    # ページ番号でソート
-    page_stats = page_stats.sort_values('ページ番号').reset_index(drop=True)
-    
-    # 包括的なページメトリクステーブル
-    st.markdown("#### ページごとのパフォーマンス詳細")
-    st.markdown('<div class="graph-description">各ページのプレビューと主要指標を一覧で確認できます。</div>', unsafe_allow_html=True)
+    # 詳細テーブル
+    st.markdown("#### スクロール深度別詳細")
+    st.dataframe(retention_df.style.format({'到達率': '{:.1f}%', '到達数': '{:,}'}), use_container_width=True)
 
-    # 表示件数選択プルダウン
-    actual_page_count = int(filtered_df['page_num_dom'].max()) if not filtered_df.empty and not filtered_df['page_num_dom'].isnull().all() else 0
-    st.info(f"📊 このLPは {actual_page_count} ページで構成されています")
-
-    _, pulldown_col = st.columns([5, 1])
-    with pulldown_col:
-        num_to_display_str = st.selectbox(
-            "表示件数",
-            ["すべて"] + list(range(5, min(51, actual_page_count + 1), 5)),
-            index=0,
-            label_visibility="collapsed" # ラベルを非表示にしてコンパクトに
-        )
-
-    # 表示するページ数を決定
-    if num_to_display_str == "すべて":
-        num_to_display = actual_page_count
-    else:
-        num_to_display = int(num_to_display_str)
-
-    # 実際のページ数と表示件数のうち、小さい方（min）でループする
-    for page_num in range(1, min(num_to_display, actual_page_count) + 1):
-        page_events = filtered_df[filtered_df['page_num_dom'] == page_num]
-
-    # 18ページ分のカードを表示
-    for page_num in range(1, num_to_display + 1):
-        with st.container():
-            col1, col2 = st.columns([1, 6], gap="large") # キャプチャ用に1、データ用に6の比率。間にスペースを追加
-
-            with col1:
-                st.markdown(f"**ページ {page_num}**")
-                # コンテンツ情報を取得
-                content_info = get_lp_content_info(selected_lp, page_num)
-                content_type = content_info.get('content_type', 'image')
-                content_source = content_info.get('content_source')
-
-                # プレビューを表示
-                if content_source:
-                    if content_type == 'video':
-                        st.video(content_source)
-                    else:
-                        st.image(content_source)
-
-            with col2:
-                # このコンテナにクラス名を付けてCSSでターゲットできるようにする
-                st.markdown('<div class="page-analysis-metrics-container">', unsafe_allow_html=True)
-
-                # メトリクスを4x2のグリッドで表示
-                metric_cols_1 = st.columns(4)
-                metric_cols_2 = st.columns(4)
-
-                # --- このループ内で各ページの指標を計算 ---
-                page_events = filtered_df[filtered_df['page_num_dom'] == page_num]
-                page_data = page_stats[page_stats['ページ番号'] == page_num]
-
-                views = int(page_data['ビュー数'].iloc[0]) if not page_data.empty and 'ビュー数' in page_data.columns else 0
-                exit_rate = page_data['離脱率'].iloc[0] if not page_data.empty and '離脱率' in page_data.columns else 0
-                stay_time = page_data['平均滞在時間(秒)'].iloc[0] if not page_data.empty and '平均滞在時間(秒)' in page_data.columns else 0
-                backflow_rate = page_data['逆行率'].iloc[0] if not page_data.empty and '逆行率' in page_data.columns else 0
-                # --- ここまで ---
-
-                # このページに到達したユニークなセッション数を計算
-                page_sessions = page_events['session_id'].nunique()
-
-                cta_clicks = page_events[(page_events['event_name'] == 'click') & (page_events['elem_classes'].str.contains('cta|btn-primary', na=False))].shape[0]
-                cta_click_rate = safe_rate(cta_clicks, page_sessions) * 100
-
-                fb_clicks = page_events[(page_events['event_name'] == 'click') & (page_events['elem_classes'].str.contains('floating', na=False))].shape[0]
-                fb_click_rate = safe_rate(fb_clicks, page_sessions) * 100
-
-                exit_pop_clicks = page_events[(page_events['event_name'] == 'click') & (page_events['elem_classes'].str.contains('exit', na=False))].shape[0]
-                exit_pop_click_rate = safe_rate(exit_pop_clicks, page_sessions) * 100
-
-                load_time = page_events['load_time_ms'].mean() if not page_events.empty else 0
-                
-                # メトリクスを配置
-                metric_cols_1[0].metric("ビュー数", f"{views:,}")
-                metric_cols_1[1].metric("離脱率", f"{exit_rate:.1f}%")
-                metric_cols_1[2].metric("平均滞在時間", f"{stay_time:.1f}秒")
-                metric_cols_1[3].metric("逆行率", f"{backflow_rate:.1f}%")
-                metric_cols_2[0].metric("CTAクリック率", f"{cta_click_rate:.1f}%")
-                metric_cols_2[1].metric("FBクリック率", f"{fb_click_rate:.1f}%")
-                metric_cols_2[2].metric("離脱POPクリック率", f"{exit_pop_click_rate:.1f}%")
-                metric_cols_2[3].metric("読み込み時間", f"{load_time:.0f}ms")
-
-                st.markdown('</div>', unsafe_allow_html=True)
-
-        st.markdown("---") # 各ページ間に区切り線を追加
-    
-    st.markdown("---")
-    
-    # 離脱率と滞在時間の散布図
-    st.markdown('### 離脱率 vs 滞在時間 ポジショニングマップ')
-    st.markdown('<div class="graph-description">各ページの離脱率（横軸）と平均滞在時間（縦軸）を散布図に表示します。右下の「要注意ゾーン」（高離脱率・低滞在時間）にあるページは、最優先で改善が必要なボトルネックです。</div>', unsafe_allow_html=True)
-
-    if len(page_stats) > 1:
-        # 平均値を計算
-        avg_exit_rate = page_stats['離脱率'].mean()
-        # 滞在時間はfiltered_dfから直接計算
-        avg_stay_time = filtered_df['stay_ms'].mean() / 1000
-
-        # 散布図を作成
-        fig_scatter = px.scatter(
-            page_stats,
-            x='離脱率',
-            y='平均滞在時間(秒)',
-            text='ページ番号',
-            size='ビュー数',
-            color_discrete_sequence=px.colors.qualitative.Plotly,
-            hover_name='ページ番号',
-            hover_data={'ページ番号': False, 'ビュー数': ':,', '離脱率': ':.1f', '平均滞在時間(秒)': ':.1f'}
-        )
-
-        # 平均線を追加
-        fig_scatter.add_vline(x=avg_exit_rate, line_dash="dash", line_color="gray", annotation_text=f"平均離脱率: {avg_exit_rate:.1f}%")
-        fig_scatter.add_hline(y=avg_stay_time, line_dash="dash", line_color="gray", annotation_text=f"全ページ平均滞在時間: {avg_stay_time:.1f}秒")
-
-        # ゾーンの背景色と注釈を追加
-        fig_scatter.add_shape(type="rect", xref="paper", yref="paper", x0=0.5, y0=0, x1=1, y1=0.5, fillcolor="rgba(255, 0, 0, 0.1)", layer="below", line_width=0)
-        fig_scatter.add_annotation(xref="paper", yref="paper", x=0.75, y=0.25, text="<b>要注意ゾーン</b><br>高離脱率<br class='mobile-br'>低滞在時間", showarrow=False, font=dict(color="red", size=14), align="center", xanchor="center", yanchor="middle")
-
-        fig_scatter.add_shape(type="rect", xref="paper", yref="paper", x0=0.5, y0=0.5, x1=1, y1=1, fillcolor="rgba(255, 165, 0, 0.1)", layer="below", line_width=0)
-        fig_scatter.add_annotation(xref="paper", yref="paper", x=0.75, y=0.75, text="<b>改善候補</b><br>高離脱率<br class='mobile-br'>高滞在時間", showarrow=False, font=dict(color="orange", size=14), align="center", xanchor="center", yanchor="middle")
-
-        fig_scatter.add_shape(type="rect", xref="paper", yref="paper", x0=0, y0=0, x1=0.5, y1=0.5, fillcolor="rgba(255, 255, 0, 0.1)", layer="below", line_width=0)
-        fig_scatter.add_annotation(xref="paper", yref="paper", x=0.25, y=0.25, text="<b>機会損失</b><br>低離脱率<br class='mobile-br'>低滞在時間", showarrow=False, font=dict(color="goldenrod", size=14), align="center", xanchor="center", yanchor="middle")
-
-        fig_scatter.add_shape(type="rect", xref="paper", yref="paper", x0=0, y0=0.5, x1=0.5, y1=1, fillcolor="rgba(0, 128, 0, 0.1)", layer="below", line_width=0)
-        fig_scatter.add_annotation(xref="paper", yref="paper", x=0.25, y=0.75, text="<b>良好ゾーン</b><br>低離脱率<br class='mobile-br'>高滞在時間", showarrow=False, font=dict(color="green", size=14), align="center", xanchor="center", yanchor="middle")
-
-        fig_scatter.update_traces(
-            textposition='top center',
-            marker=dict(sizemin=5),
-            textfont_size=12
-        )
-        fig_scatter.update_layout(
-            height=600,
-            xaxis_title='離脱率 (%)',
-            yaxis_title='平均滞在時間 (秒)',
-            showlegend=False,
-            dragmode=False
-        )
-        st.plotly_chart(fig_scatter, use_container_width=True, key='plotly_chart_scatter_exit_stay')
-    else:
-        st.info("ポジショニングマップを表示するには、2ページ以上のデータが必要です。")
-    
-    st.markdown("---")
-    
-    # 滞在時間が短いページ、離脱率が高いページ、逆行パターンを並べて表示
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        st.markdown('##### 滞在時間が短いページ TOP5')
-        st.markdown('<div class="graph-description">コンテンツが魅力的でない、または読みづらい可能性があります。</div>', unsafe_allow_html=True)
-        
-        # ページごとの平均滞在時間を計算
-        stay_time_per_page = filtered_df.groupby('page_num_dom')['stay_ms'].mean().reset_index()
-        stay_time_per_page.columns = ['ページ番号', '平均滞在時間(秒)']
-        stay_time_per_page['平均滞在時間(秒)'] /= 1000
-        
-        # 上位5件を取得
-        short_stay_pages = stay_time_per_page.nsmallest(5, '平均滞在時間(秒)')
-        
-        if not short_stay_pages.empty:
-            display_df = short_stay_pages.copy()
-            display_df['ページ番号'] = display_df['ページ番号'].astype(int)
-            st.dataframe(display_df.style.format({'平均滞在時間(秒)': '{:.1f}秒'}), use_container_width=True, hide_index=True, height=212) # 高さを固定
-        else:
-            st.info("データがありません。")
-
-    with col2:
-        st.markdown('##### 離脱率が高いページ TOP5')
-        st.markdown('<div class="graph-description">ユーザーが最も離脱しやすいボトルネックとなっている可能性が高いページです。</div>', unsafe_allow_html=True)
-        high_exit_pages = page_stats.nlargest(5, '離脱率')[['ページ番号', '離脱率']]
-        high_exit_pages['ページ番号'] = high_exit_pages['ページ番号'].astype(int)
-        st.dataframe(high_exit_pages.style.format({'離脱率': '{:.1f}%'}), use_container_width=True, hide_index=True, height=212) # 高さを固定
-
-    with col3:
-        st.markdown('##### 逆行率が高いページ TOP5')
-        st.markdown('<div class="graph-description">逆行率が高い場合、コンテンツの流れに問題がある可能性があります。</div>', unsafe_allow_html=True)
-        
-        # page_statsから逆行率が高いページTOP5を取得
-        if '逆行率' in page_stats.columns and not page_stats.empty:
-            high_backflow_pages = page_stats.nlargest(5, '逆行率')[['ページ番号', '逆行率']]
-            high_backflow_pages['ページ番号'] = high_backflow_pages['ページ番号'].astype(int)
-            st.dataframe(high_backflow_pages.style.format({'逆行率': '{:.1f}%'}), use_container_width=True, hide_index=True, height=212)
-        else:
-            st.info("逆行率のデータがありません。")
-    
-    st.markdown("---")
-
-    # --- AI分析と考察 ---
+    # AI分析
     st.markdown("### AIによる分析と考察")
-    st.markdown('<div class="graph-description">ページ分析の結果に基づき、AIが現状の評価と改善のための考察を提示します。</div>', unsafe_allow_html=True)
-
     # AI分析の表示状態を管理
-    if 'page_analysis_ai_open' not in st.session_state:
-        st.session_state.page_analysis_ai_open = False
+    if 'scroll_ai_open' not in st.session_state:
+        st.session_state.scroll_ai_open = False
 
-    if st.button("AI分析を実行", key="page_analysis_ai_btn", type="primary", use_container_width=True):
-        st.session_state.page_analysis_ai_open = True
+    if st.button("AI分析を実行", key="scroll_ai_btn", type="primary", use_container_width=True):
+        st.session_state.scroll_ai_open = True
 
-    if st.session_state.page_analysis_ai_open:
-        with st.spinner("AIがページデータを分析中..."):
-            context_data = f"""
-            - 期間: {start_date} ～ {end_date}
-            - 対象LP: {selected_lp}
-            - ページ別統計データ:
-            {page_stats.to_markdown(index=False)}
-            """
-            prompt = """
-            あなたはプロのLPOコンサルタントです。上記のページ別統計データを基に、以下の構成で分析と提案を行ってください。
-
-            ### 1. 現状の評価
-            - ポジショニングマップ（離脱率と滞在時間）の観点から、最も重要な改善候補となる「ボトルネックページ」を1つ特定してください。
-            - そのページの「離脱率」と「平均滞在時間」を引用し、なぜそれがボトルネックだと判断したのかを説明してください。
-
-            ### 2. 今後の考察と改善案
-            - 特定したボトルネックページについて、ユーザーが離脱する原因として考えられる仮説を3つ挙げてください。
-            - それぞれの仮説に対して、具体的な改善アクション案を提案してください。
-            """
-            ai_response = generate_ai_insight(prompt, context_data)
+    if st.session_state.scroll_ai_open:
+        with st.spinner("AIがスクロールデータを分析中..."):
+            context = f"期間: {start_date}~{end_date}\nスクロール到達率データ:\n{retention_df.to_markdown()}"
+            prompt = "スクロール到達率データを基に、ユーザーの離脱ポイント（ボトルネック）を特定し、改善案を3つ提案してください。"
+            ai_response = generate_ai_insight(prompt, context)
             st.markdown(ai_response)
 
-        if st.button("AI分析を閉じる", key="page_analysis_ai_close"):
-            st.session_state.page_analysis_ai_open = False
+        if st.button("AI分析を閉じる", key="scroll_ai_close"):
+            st.session_state.scroll_ai_open = False
 
     # --- よくある質問 ---
     st.markdown("#### このページの分析について質問する")
-    if 'page_faq_toggle' not in st.session_state:
-        st.session_state.page_faq_toggle = {1: False, 2: False, 3: False, 4: False}
+    if 'scroll_faq_toggle' not in st.session_state:
+        st.session_state.scroll_faq_toggle = {1: False, 2: False, 3: False, 4: False}
 
     faq_cols = st.columns(2)
     with faq_cols[0]:
-        if st.button("最も改善すべきページはどれ？", key="faq_page_1", use_container_width=True):
-            st.session_state.page_faq_toggle[1] = not st.session_state.page_faq_toggle[1]
-            st.session_state.page_faq_toggle[2], st.session_state.page_faq_toggle[3], st.session_state.page_faq_toggle[4] = False, False, False
-        if st.session_state.page_faq_toggle[1]:
-            if not page_stats.empty:
-                bottleneck_page = page_stats.loc[page_stats['離脱率'].idxmax()]
-                st.info(f"**ページ{int(bottleneck_page['ページ番号'])}** です。離脱率が{bottleneck_page['離脱率']:.1f}%と高く、平均滞在時間が{bottleneck_page['平均滞在時間(秒)']:.1f}秒と短いため、最優先で改善すべきボトルネックです。")
+        if st.button("どこで離脱が多いですか？", key="faq_scroll_1", use_container_width=True):
+            st.session_state.scroll_faq_toggle[1] = not st.session_state.scroll_faq_toggle[1]
+            st.session_state.scroll_faq_toggle[2], st.session_state.scroll_faq_toggle[3], st.session_state.scroll_faq_toggle[4] = False, False, False
+        if st.session_state.scroll_faq_toggle[1]:
+            st.info("詳細テーブルの「到達率」が急激に下がっている箇所（スクロール深度）が離脱ポイントです。例えば、30%から40%の間で到達率が10%以上下がっている場合、そのエリアのコンテンツに問題がある可能性があります。")
         
-        if st.button("滞在時間が短いページの共通点は？", key="faq_page_3", use_container_width=True):
-            st.session_state.page_faq_toggle[3] = not st.session_state.page_faq_toggle[3]
-            st.session_state.page_faq_toggle[1], st.session_state.page_faq_toggle[2], st.session_state.page_faq_toggle[4] = False, False, False
-        if st.session_state.page_faq_toggle[3]:
-            st.info("滞在時間が短いページは、ユーザーの期待とコンテンツが一致していない、情報が分かりにくい、または単に興味を引かれていない可能性があります。前のページからの文脈を見直し、コンテンツの魅力を高める必要があります。")
+        if st.button("平均スクロール率の目安は？", key="faq_scroll_3", use_container_width=True):
+            st.session_state.scroll_faq_toggle[3] = not st.session_state.scroll_faq_toggle[3]
+            st.session_state.scroll_faq_toggle[1], st.session_state.scroll_faq_toggle[2], st.session_state.scroll_faq_toggle[4] = False, False, False
+        if st.session_state.scroll_faq_toggle[3]:
+            st.info("業界や商材によりますが、一般的にLPの平均スクロール率は30%〜50%程度と言われています。30%を下回る場合は、ファーストビューでの訴求が弱いか、ページ構成がユーザーの期待と合っていない可能性があります。")
     with faq_cols[1]:
-        if st.button("ユーザーが前のページに戻る原因は？", key="faq_page_2", use_container_width=True):
-            st.session_state.page_faq_toggle[2] = not st.session_state.page_faq_toggle[2]
-            st.session_state.page_faq_toggle[1], st.session_state.page_faq_toggle[3], st.session_state.page_faq_toggle[4] = False, False, False
-        if st.session_state.page_faq_toggle[2]:
-            st.info("ユーザーが逆行（前のページに戻る）するのは、主に「求めている情報が見つからない」「前のページの情報と比較・再確認したい」という理由が考えられます。逆行が多いページ間のコンテンツの流れを見直し、情報の不足がないか確認することが重要です。")
+        if st.button("読了率を上げるには？", key="faq_scroll_2", use_container_width=True):
+            st.session_state.scroll_faq_toggle[2] = not st.session_state.scroll_faq_toggle[2]
+            st.session_state.scroll_faq_toggle[1], st.session_state.scroll_faq_toggle[3], st.session_state.scroll_faq_toggle[4] = False, False, False
+        if st.session_state.scroll_faq_toggle[2]:
+            st.info("読了率（90%スクロール）を上げるには、ストーリー性のある構成にする、読みやすいデザイン（文字サイズ、行間）にする、途中で飽きさせないための画像や動画を配置する、などの工夫が有効です。")
         
-        if st.button("離脱率と滞在時間の関係は？", key="faq_page_4", use_container_width=True):
-            st.session_state.page_faq_toggle[4] = not st.session_state.page_faq_toggle[4]
-            st.session_state.page_faq_toggle[1], st.session_state.page_faq_toggle[2], st.session_state.page_faq_toggle[3] = False, False, False
-        if st.session_state.page_faq_toggle[4]:
-            st.info("「離脱率が高く、滞在時間が短い」ページは、コンテンツが全く響いていない重大な問題ページです。逆に「離脱率が高く、滞在時間が長い」ページは、コンテンツは読まれているが次のアクションに繋がっていない「惜しい」ページと言えます。")
+        if st.button("スマホでの離脱対策は？", key="faq_scroll_4", use_container_width=True):
+            st.session_state.scroll_faq_toggle[4] = not st.session_state.scroll_faq_toggle[4]
+            st.session_state.scroll_faq_toggle[1], st.session_state.scroll_faq_toggle[2], st.session_state.scroll_faq_toggle[3] = False, False, False
+        if st.session_state.scroll_faq_toggle[4]:
+            st.info("スマホは画面が小さいため、文字の詰め込みすぎは厳禁です。箇条書きを活用する、画像を大きく表示する、タップしやすいボタン配置にするなど、スマホユーザーの操作性を最優先に考えたデザインに改善しましょう。")
 
 
 # タブ3: セグメント分析
-elif selected_analysis == "広告分析":
+elif selected_analysis == "チャネル・広告分析":
     st.markdown('<div class="sub-header">広告分析</div>', unsafe_allow_html=True)
 
     # --- ページ上部の共通フィルター ---
@@ -1955,7 +1688,7 @@ elif selected_analysis == "広告分析":
         セッション数=('session_id', 'nunique'),
         クリック数=('event_name', lambda x: (x == 'click').sum()),
         平均滞在時間=('stay_ms', 'mean'),
-        平均到達ページ=('max_page_reached', 'mean')
+        平均スクロール率=('scroll_depth', 'mean')
     ).reset_index()
     segment_stats.rename(columns={segment_col: segment_name}, inplace=True)
     
@@ -1964,15 +1697,15 @@ elif selected_analysis == "広告分析":
     segment_cv.rename(columns={segment_col: segment_name, 'session_id': 'CV数'}, inplace=True)
     segment_stats = pd.merge(segment_stats, segment_cv, on=segment_name, how='left').fillna(0)
 
-    # FV残存数
-    segment_fv = display_df[display_df['max_page_reached'] >= 2].groupby(segment_col)['session_id'].nunique().reset_index()
-    segment_fv.rename(columns={segment_col: segment_name, 'session_id': 'FV残存数'}, inplace=True)
-    segment_stats = pd.merge(segment_stats, segment_fv, on=segment_name, how='left').fillna(0)
+    # 読了数 (90%)
+    segment_read = display_df[display_df['scroll_depth'] >= 90].groupby(segment_col)['session_id'].nunique().reset_index()
+    segment_read.rename(columns={segment_col: segment_name, 'session_id': '読了数'}, inplace=True)
+    segment_stats = pd.merge(segment_stats, segment_read, on=segment_name, how='left').fillna(0)
 
-    # 最終CTA到達数
-    segment_final_cta = display_df[display_df['max_page_reached'] >= 10].groupby(segment_col)['session_id'].nunique().reset_index()
-    segment_final_cta.rename(columns={segment_col: segment_name, 'session_id': '最終CTA到達数'}, inplace=True)
-    segment_stats = pd.merge(segment_stats, segment_final_cta, on=segment_name, how='left').fillna(0)
+    # CTAクリック数
+    segment_cta = display_df[display_df['event_name'] == 'click_cta'].groupby(segment_col)['session_id'].nunique().reset_index()
+    segment_cta.rename(columns={segment_col: segment_name, 'session_id': 'CTAクリック数'}, inplace=True)
+    segment_stats = pd.merge(segment_stats, segment_cta, on=segment_name, how='left').fillna(0)
 
     # エンゲージメント率（滞在時間30秒以上）
     engaged_sessions = display_df[display_df['stay_ms'] >= 30000].groupby(segment_col)['session_id'].nunique().reset_index()
@@ -1982,20 +1715,20 @@ elif selected_analysis == "広告分析":
     # 率の計算
     segment_stats['CVR'] = segment_stats.apply(lambda row: safe_rate(row['CV数'], row['セッション数']) * 100, axis=1)
     segment_stats['CTR'] = segment_stats.apply(lambda row: safe_rate(row['クリック数'], row['セッション数']) * 100, axis=1)
-    segment_stats['FV残存率'] = segment_stats.apply(lambda row: safe_rate(row['FV残存数'], row['セッション数']) * 100, axis=1)
-    segment_stats['最終CTA到達率'] = segment_stats.apply(lambda row: safe_rate(row['最終CTA到達数'], row['セッション数']) * 100, axis=1)
+    segment_stats['読了率'] = segment_stats.apply(lambda row: safe_rate(row['読了数'], row['セッション数']) * 100, axis=1)
+    segment_stats['CTAクリック率'] = segment_stats.apply(lambda row: safe_rate(row['CTAクリック数'], row['セッション数']) * 100, axis=1)
     segment_stats['エンゲージメント率'] = segment_stats.apply(lambda row: safe_rate(row['エンゲージセッション数'], row['セッション数']) * 100, axis=1)
     segment_stats['平均滞在時間'] = segment_stats['平均滞在時間'] / 1000
 
     # テーブル表示
     display_cols = [
         segment_name, 'セッション数', 'CV数', 'CVR', 'クリック数', 'CTR', 
-        'FV残存率', '最終CTA到達率', '平均到達ページ', '平均滞在時間', 'エンゲージメント率'
+        '読了率', 'CTAクリック率', '平均スクロール率', '平均滞在時間', 'エンゲージメント率'
     ]
     st.dataframe(segment_stats[display_cols].style.format({
         'セッション数': '{:,.0f}', 'CV数': '{:,.0f}', 'CVR': '{:.2f}%',
-        'クリック数': '{:,.0f}', 'CTR': '{:.2f}%', 'FV残存率': '{:.2f}%',
-        '最終CTA到達率': '{:.2f}%', '平均到達ページ': '{:.1f}',
+        'クリック数': '{:,.0f}', 'CTR': '{:.2f}%', '読了率': '{:.2f}%',
+        'CTAクリック率': '{:.2f}%', '平均スクロール率': '{:.1f}%',
         '平均滞在時間': '{:.1f}秒', 'エンゲージメント率': '{:.2f}%',
     }), use_container_width=True, hide_index=True)
     
@@ -2003,7 +1736,7 @@ elif selected_analysis == "広告分析":
     st.markdown("##### グラフに表示する指標を選択")
     all_metrics = [
         'セッション数', 'CV数', 'CVR', 'クリック数', 'CTR', 
-        'FV残存率', '最終CTA到達率', '平均到達ページ', '平均滞在時間', 'エンゲージメント率'
+        '読了率', 'CTAクリック率', '平均スクロール率', '平均滞在時間', 'エンゲージメント率'
     ]
     selected_metrics = st.multiselect(
         "最大2つまで選択できます",
@@ -2262,17 +1995,16 @@ elif selected_analysis == "A/Bテスト分析":
     agg_dict = {
         'session_id': 'nunique',
         'stay_ms': 'mean',
-        'max_page_reached': 'mean',
-        'completion_rate': 'mean'
+        'scroll_depth': 'mean'
     }
 
     if 'p_value' in filtered_df.columns:
         agg_dict['p_value'] = 'first'
         ab_stats = filtered_df.groupby(['ab_test_target', 'ab_variant']).agg(agg_dict).reset_index()
-        ab_stats.columns = ['テスト種別', 'バリアント', 'セッション数', '平均滞在時間(ms)', '平均到達ページ数', '平均完了率', 'p値']
+        ab_stats.columns = ['テスト種別', 'バリアント', 'セッション数', '平均滞在時間(ms)', '平均スクロール率', 'p値']
     else:
         ab_stats = filtered_df.groupby(['ab_test_target', 'ab_variant']).agg(agg_dict).reset_index()
-        ab_stats.columns = ['テスト種別', 'バリアント', 'セッション数', '平均滞在時間(ms)', '平均到達ページ数', '平均完了率']
+        ab_stats.columns = ['テスト種別', 'バリアント', 'セッション数', '平均滞在時間(ms)', '平均スクロール率']
         # p_valueカラムが存在しない場合は、1.0で初期化
         ab_stats['p値'] = 1.0
     
@@ -2287,19 +2019,19 @@ elif selected_analysis == "A/Bテスト分析":
     ab_stats = ab_stats.merge(ab_cv, on=['テスト種別', 'バリアント'], how='left').fillna({'コンバージョン数': 0})
     ab_stats['コンバージョン率'] = ab_stats.apply(lambda row: safe_rate(row['コンバージョン数'], row['セッション数']) * 100, axis=1)
     
-    # FV残存率（テスト種別とバリアントでグループ化）
-    fv_retention = filtered_df[filtered_df['max_page_reached'] >= 2].groupby(['ab_test_target', 'ab_variant'])['session_id'].nunique().reset_index()
-    fv_retention.columns = ['テスト種別', 'バリアント', 'FV残存数']
+    # 読了率（テスト種別とバリアントでグループ化）
+    read_through = filtered_df[filtered_df['scroll_depth'] >= 90].groupby(['ab_test_target', 'ab_variant'])['session_id'].nunique().reset_index()
+    read_through.columns = ['テスト種別', 'バリアント', '読了数']
     
-    ab_stats = ab_stats.merge(fv_retention, on=['テスト種別', 'バリアント'], how='left').fillna({'FV残存数': 0})
-    ab_stats['FV残存率'] = ab_stats.apply(lambda row: safe_rate(row['FV残存数'], row['セッション数']) * 100, axis=1)
+    ab_stats = ab_stats.merge(read_through, on=['テスト種別', 'バリアント'], how='left').fillna({'読了数': 0})
+    ab_stats['読了率'] = ab_stats.apply(lambda row: safe_rate(row['読了数'], row['セッション数']) * 100, axis=1)
     
-    # 最終CTA到達率（テスト種別とバリアントでグループ化）
-    final_cta = filtered_df[filtered_df['max_page_reached'] >= 10].groupby(['ab_test_target', 'ab_variant'])['session_id'].nunique().reset_index()
-    final_cta.columns = ['テスト種別', 'バリアント', '最終CTA到達数']
+    # CTAクリック率（テスト種別とバリアントでグループ化）
+    cta_clicks = filtered_df[filtered_df['event_name'] == 'click_cta'].groupby(['ab_test_target', 'ab_variant'])['session_id'].nunique().reset_index()
+    cta_clicks.columns = ['テスト種別', 'バリアント', 'CTAクリック数']
     
-    ab_stats = ab_stats.merge(final_cta, on=['テスト種別', 'バリアント'], how='left').fillna({'最終CTA到達数': 0})
-    ab_stats['最終CTA到達率'] = ab_stats.apply(lambda row: safe_rate(row['最終CTA到達数'], row['セッション数']) * 100, axis=1)
+    ab_stats = ab_stats.merge(cta_clicks, on=['テスト種別', 'バリアント'], how='left').fillna({'CTAクリック数': 0})
+    ab_stats['CTAクリック率'] = ab_stats.apply(lambda row: safe_rate(row['CTAクリック数'], row['セッション数']) * 100, axis=1)
     
     # テスト種別が'-'の行（テスト対象外のデータ）を除外
     ab_stats = ab_stats[ab_stats['テスト種別'] != '-'].reset_index(drop=True)
@@ -2330,7 +2062,7 @@ elif selected_analysis == "A/Bテスト分析":
     # A/Bテスト比較
     st.markdown("#### A/Bテスト比較")
     st.markdown('<div class="graph-description">各バリアント（AとB）の主要な指標を比較し、どちらが優れているかを評価します。</div>', unsafe_allow_html=True)
-    display_cols = ['セッション数', 'コンバージョン率', 'CVR差分(pt)', '有意差', 'p値', 'FV残存率', '最終CTA到達率', '平均到達ページ数', '平均滞在時間(秒)'] # type: ignore
+    display_cols = ['セッション数', 'コンバージョン率', 'CVR差分(pt)', '有意差', 'p値', '読了率', 'CTAクリック率', '平均スクロール率', '平均滞在時間(秒)'] # type: ignore
     
     # 'control' バリアントを除外して表示用のDataFrameを作成
     ab_stats_for_display = ab_stats[ab_stats['バリアント'] != 'control'].copy()
@@ -2347,9 +2079,9 @@ elif selected_analysis == "A/Bテスト分析":
             'コンバージョン率': '{:.2f}%',
             'CVR差分(pt)': lambda x: f'{x:+.2f}pt' if pd.notna(x) and x != 0 else '---',
             'p値': '{:.4f}',
-            'FV残存率': '{:.2f}%',
-            '最終CTA到達率': '{:.2f}%',
-            '平均到達ページ数': '{:.1f}',
+            '読了率': '{:.2f}%',
+            'CTAクリック率': '{:.2f}%',
+            '平均スクロール率': '{:.1f}%',
             '平均滞在時間(秒)': '{:.1f}'
         }).apply(highlight_variant_b, axis=1), use_container_width=True)
     else:
@@ -2756,16 +2488,16 @@ elif selected_analysis == "インタラクション分析":
     st.markdown('<div class="graph-description">LP内の各インタラクション要素について、要素が表示されたセッション数、クリック数、およびクリック率を表示します。</div>', unsafe_allow_html=True)
 
     interactions_for_list = {
-        'CTAボタンクリック': {'condition': (filtered_df['event_name'] == 'click') & (filtered_df['elem_classes'].str.contains('cta|btn-primary', na=False)), 'page_num': 9},
-        'フローティングバナークリック': {'condition': (filtered_df['event_name'] == 'click') & (filtered_df['elem_classes'].str.contains('floating', na=False)), 'page_num': 1}, # 全ページで表示されると仮定
-        '離脱防止ポップアップクリック': {'condition': (filtered_df['event_name'] == 'click') & (filtered_df['elem_classes'].str.contains('exit', na=False)), 'page_num': 1}, # 全ページで表示されると仮定
-        '動画視聴完了': {'condition': filtered_df['event_name'] == 'video_completion', 'page_num': 1} # 動画はP1にあると仮定
+        'CTAボタンクリック': {'condition': (filtered_df['event_name'] == 'click') & (filtered_df['elem_classes'].str.contains('cta|btn-primary', na=False)), 'scroll_threshold': 90},
+        'フローティングバナークリック': {'condition': (filtered_df['event_name'] == 'click') & (filtered_df['elem_classes'].str.contains('floating', na=False)), 'scroll_threshold': 0}, # 全ページで表示されると仮定
+        '離脱防止ポップアップクリック': {'condition': (filtered_df['event_name'] == 'click') & (filtered_df['elem_classes'].str.contains('exit', na=False)), 'scroll_threshold': 0}, # 全ページで表示されると仮定
+        '動画視聴完了': {'condition': filtered_df['event_name'] == 'video_completion', 'scroll_threshold': 0} # 動画はFVにあると仮定
     }
 
     interaction_list_data = []
     for name, details in interactions_for_list.items():
         condition = details['condition']
-        page_num = details['page_num']
+        scroll_threshold = details['scroll_threshold']
 
         # クリック数または視聴開始数（イベントの行数）
         action_count = condition.sum()
@@ -2774,11 +2506,11 @@ elif selected_analysis == "インタラクション分析":
         action_session_count = filtered_df[condition]['session_id'].nunique()
 
         # 表示セッション数（要素が存在するページに到達したセッション数）
-        # page_numが1の場合は全セッションが表示機会を持つとみなす
-        if page_num == 1:
+        # scroll_thresholdが0の場合は全セッションが表示機会を持つとみなす
+        if scroll_threshold == 0:
             impression_sessions = total_sessions
         else:
-            impression_sessions = filtered_df[filtered_df['max_page_reached'] >= page_num]['session_id'].nunique()
+            impression_sessions = filtered_df[filtered_df['scroll_depth'] >= scroll_threshold]['session_id'].nunique()
 
         # クリック率（行動セッション数 / 表示セッション数）
         rate = safe_rate(action_session_count, impression_sessions) * 100
@@ -2885,6 +2617,35 @@ elif selected_analysis == "インタラクション分析":
     )
     st.plotly_chart(fig, use_container_width=True, key='plotly_chart_interaction_contribution')
 
+    # --- インタラクション バブルチャート (項目のプロット) ---
+    st.markdown("#### インタラクション要素の貢献度マップ")
+    st.markdown('<div class="graph-description">各要素の「CVRリフト率（貢献度）」と「CVR（実力）」をプロットしました。右上の要素ほど、CVへの貢献度が高く、かつ高確率でCVに繋がっています。</div>', unsafe_allow_html=True)
+
+    if not contribution_df.empty:
+        fig_bubble = px.scatter(
+            contribution_df,
+            x='CVRリフト率 (%)',
+            y='CVR',
+            size='セッション数', # バブルの大きさは利用ボリューム
+            color='インタラクション要素',
+            text='インタラクション要素',
+            hover_data=['CV数', 'CVRリフト率 (%)']
+        )
+        fig_bubble.update_traces(textposition='top center')
+        fig_bubble.update_layout(
+            height=500,
+            xaxis_title="CVRリフト率 (%)",
+            yaxis_title="CVR (%)",
+            showlegend=False, # テキストで表示するので凡例は隠す（すっきりさせる）
+            xaxis=dict(zeroline=True, zerolinewidth=2, zerolinecolor='gray'), # X=0の線を強調
+        )
+        # 象限の背景色を追加（リッチな見た目）
+        fig_bubble.add_shape(type="rect", xref="paper", yref="paper", x0=0.5, y0=0.5, x1=1, y1=1, fillcolor="rgba(0, 128, 0, 0.05)", layer="below", line_width=0)
+        
+        st.plotly_chart(fig_bubble, use_container_width=True, key='plotly_chart_interaction_bubble')
+    else:
+        st.info("プロットするデータがありません。")
+
     st.markdown("---")
 
     # --- AI分析と考察 ---
@@ -2956,10 +2717,10 @@ elif selected_analysis == "インタラクション分析":
         if st.session_state.interaction_faq_toggle[4]:
             st.info("はい、大きく変わることがあります。例えば、PCではクリックしやすくても、スマホではボタンが小さすぎて押しにくい、といった問題が考えられます。「セグメント分析」でデバイス別のパフォーマンスを確認し、最適化することが重要です。")
 
-# タブ6: 動画・スクロール分析
-elif selected_analysis == "動画・スクロール分析":
+# タブ6: 動画エンゲージメント
+elif selected_analysis == "動画エンゲージメント":
     filter_cols_1 = st.columns(4)
-    st.markdown('<div class="sub-header">動画・スクロール分析</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-header">動画エンゲージメント</div>', unsafe_allow_html=True)
     # メインエリア: フィルターと比較設定
     st.markdown('<div class="sub-header">フィルター設定</div>', unsafe_allow_html=True)
 
@@ -3087,6 +2848,7 @@ elif selected_analysis == "動画・スクロール分析":
     total_sessions = filtered_df['session_id'].nunique()
 
     # --- 動画視聴ファネル ---
+        
     st.markdown("#### 動画視聴ファネル")
     st.markdown('<div class="graph-description">動画の再生開始から視聴完了までのユーザーの残存率を可視化します。どの段階で離脱が多いかを把握できます。</div>', unsafe_allow_html=True)
 
@@ -3124,17 +2886,7 @@ elif selected_analysis == "動画・スクロール分析":
 
     st.markdown("---")
 
-    # 逆行率分析
-    st.markdown("ページ別平均逆行率")
-    st.markdown('<div class="graph-description">各ページでユーザーがどれだけ逆方向にスクロールしたかを表示します。逆行率が高いページは、ユーザーが迷っているまたは情報を再確認している可能性があります。</div>', unsafe_allow_html=True) # type: ignore
-    scroll_stats = filtered_df.groupby('page_num_dom')['scroll_pct'].mean().reset_index()
-    scroll_stats.columns = ['ページ番号', '平均逆行率']
-    scroll_stats['平均逆行率(%)'] = scroll_stats['平均逆行率'] * 100
-    
-    fig = px.bar(scroll_stats, x='ページ番号', y='平均逆行率(%)', text='平均逆行率(%)')
-    fig.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
-    fig.update_layout(height=400, showlegend=False, xaxis_title='ページ番号', yaxis_title='平均逆行率 (%)', dragmode=False)
-    st.plotly_chart(fig, use_container_width=True, key='plotly_chart_18') # This already has use_container_width=True
+
     
     # 動画視聴分析（動画イベントがある場合）
     video_df = filtered_df[filtered_df['video_src'].notna()]
@@ -3177,30 +2929,7 @@ elif selected_analysis == "動画・スクロール分析":
         fig.update_layout(height=400, showlegend=False, yaxis_title='コンバージョン率 (%)', dragmode=False)
         st.plotly_chart(fig, use_container_width=True, key='plotly_chart_19') # This already has use_container_width=True
     
-    # 逆行率別CVR
-    st.markdown("逆行率別コンバージョン率")
-    st.markdown('<div class="graph-description">逆行率の範囲ごとにコンバージョン率を表示します。逆行率が高いほどコンバージョン率が低い傾向があるかを確認できます。</div>', unsafe_allow_html=True) # type: ignore
-    
-    # 逆行率を区間に分ける
-    filtered_df_scroll = filtered_df.copy()
-    filtered_df_scroll['scroll_range'] = pd.cut(filtered_df_scroll['scroll_pct'], bins=[0, 0.25, 0.5, 0.75, 1.0], labels=['0-25%', '25-50%', '50-75%', '75-100%'])
-    
-    scroll_range_sessions = filtered_df_scroll.groupby('scroll_range', observed=True)['session_id'].nunique().reset_index()
-    scroll_range_sessions.columns = ['逆行率', 'セッション数']
-    scroll_range_sessions['逆行率'] = scroll_range_sessions['逆行率'].astype(str)
-    
-    scroll_range_cv = filtered_df_scroll[filtered_df_scroll['cv_type'].notna()].groupby('scroll_range', observed=True)['session_id'].nunique().reset_index()
-    scroll_range_cv.columns = ['逆行率', 'コンバージョン数']
-    scroll_range_cv['逆行率'] = scroll_range_cv['逆行率'].astype(str)
-    
-    scroll_range_stats = scroll_range_sessions.merge(scroll_range_cv, on='逆行率', how='left')
-    scroll_range_stats['コンバージョン数'] = scroll_range_stats['コンバージョン数'].fillna(0)
-    scroll_range_stats['コンバージョン率'] = scroll_range_stats.apply(lambda row: safe_rate(row['コンバージョン数'], row['セッション数']) * 100, axis=1)
-    
-    fig = px.bar(scroll_range_stats, x='逆行率', y='コンバージョン率', text='コンバージョン率')
-    fig.update_traces(texttemplate='%{text:.2f}%', textposition='outside')
-    fig.update_layout(height=400, showlegend=False, xaxis_title='逆行率', yaxis_title='コンバージョン率 (%)', dragmode=False)
-    st.plotly_chart(fig, use_container_width=True, key='plotly_chart_20') # This already has use_container_width=True
+
 
     st.markdown("---")
 
@@ -3428,41 +3157,41 @@ elif selected_analysis == "時系列分析":
     daily_stats = filtered_df.groupby(filtered_df['event_date'].dt.date).agg({
         'session_id': 'nunique',
         'stay_ms': 'mean',
-        'max_page_reached': 'mean'
+        'scroll_depth': 'mean'
     }).reset_index()
-    daily_stats.columns = ['日付', 'セッション数', '平均滞在時間(ms)', '平均到達ページ数']
+    daily_stats.columns = ['日付', 'セッション数', '平均滞在時間(ms)', '平均スクロール率']
     daily_stats['平均滞在時間(秒)'] = daily_stats['平均滞在時間(ms)'] / 1000
     
-    daily_cv = filtered_df[filtered_df['cv_type'].notna()].groupby(
-        filtered_df[filtered_df['cv_type'].notna()]['event_date'].dt.date
+    daily_cv = filtered_df[filtered_df['event_name'] == 'conversion'].groupby(
+        filtered_df[filtered_df['event_name'] == 'conversion']['event_date'].dt.date
     )['session_id'].nunique().reset_index()
     daily_cv.columns = ['日付', 'コンバージョン数']
     
     daily_stats = daily_stats.merge(daily_cv, on='日付', how='left').fillna(0) # type: ignore
     daily_stats['コンバージョン率'] = daily_stats.apply(lambda row: safe_rate(row['コンバージョン数'], row['セッション数']) * 100, axis=1) # type: ignore
     
-    # FV残存率
-    daily_fv = filtered_df[filtered_df['max_page_reached'] >= 2].groupby(
-        filtered_df[filtered_df['max_page_reached'] >= 2]['event_date'].dt.date
+    # 読了率 (90%)
+    daily_read = filtered_df[filtered_df['scroll_depth'] >= 90].groupby(
+        filtered_df[filtered_df['scroll_depth'] >= 90]['event_date'].dt.date
     )['session_id'].nunique().reset_index()
-    daily_fv.columns = ['日付', 'FV残存数']
+    daily_read.columns = ['日付', '読了数']
     
-    daily_stats = daily_stats.merge(daily_fv, on='日付', how='left').fillna(0) # type: ignore
-    daily_stats['FV残存率'] = daily_stats.apply(lambda row: safe_rate(row['FV残存数'], row['セッション数']) * 100, axis=1)
+    daily_stats = daily_stats.merge(daily_read, on='日付', how='left').fillna(0) # type: ignore
+    daily_stats['読了率'] = daily_stats.apply(lambda row: safe_rate(row['読了数'], row['セッション数']) * 100, axis=1)
     
-    # 最終CTA到達率
-    daily_cta = filtered_df[filtered_df['max_page_reached'] >= 10].groupby(
-        filtered_df[filtered_df['max_page_reached'] >= 10]['event_date'].dt.date
+    # CTAクリック率
+    daily_cta = filtered_df[filtered_df['event_name'] == 'click_cta'].groupby(
+        filtered_df[filtered_df['event_name'] == 'click_cta']['event_date'].dt.date
     )['session_id'].nunique().reset_index()
-    daily_cta.columns = ['日付', '最終CTA到達数']
+    daily_cta.columns = ['日付', 'CTAクリック数']
     
     daily_stats = daily_stats.merge(daily_cta, on='日付', how='left').fillna(0)
-    daily_stats['最終CTA到達率'] = daily_stats.apply(lambda row: safe_rate(row['最終CTA到達数'], row['セッション数']) * 100, axis=1)
+    daily_stats['CTAクリック率'] = daily_stats.apply(lambda row: safe_rate(row['CTAクリック数'], row['セッション数']) * 100, axis=1)
 
     # グラフ選択
     metric_to_plot = st.selectbox("表示する指標を選択", [
-        "セッション数", "コンバージョン数", "コンバージョン率", "FV残存率",
-        "最終CTA到達率", "平均到達ページ数", "平均滞在時間(秒)"
+        "セッション数", "コンバージョン数", "コンバージョン率", "読了率",
+        "CTAクリック率", "平均スクロール率", "平均滞在時間(秒)"
     ], key="timeseries_metric_select")
     
     fig = px.line(daily_stats, x='日付', y=metric_to_plot, markers=True)
@@ -3508,8 +3237,13 @@ elif selected_analysis == "時系列分析":
 
     # 曜日と時間の列を追加
     heatmap_df = filtered_df.copy()
-    heatmap_df['hour'] = heatmap_df['event_timestamp'].dt.hour
-    heatmap_df['dow_name'] = heatmap_df['event_timestamp'].dt.day_name()
+    if pd.api.types.is_numeric_dtype(heatmap_df['event_timestamp']):
+        heatmap_df['event_timestamp_dt'] = pd.to_datetime(heatmap_df['event_timestamp'], unit='us')
+    else:
+        heatmap_df['event_timestamp_dt'] = pd.to_datetime(heatmap_df['event_timestamp'])
+
+    heatmap_df['hour'] = heatmap_df['event_timestamp_dt'].dt.hour
+    heatmap_df['dow_name'] = heatmap_df['event_timestamp_dt'].dt.day_name()
 
     # 時間と曜日でグループ化してセッション数とCV数を計算
     heatmap_sessions = heatmap_df.groupby(['hour', 'dow_name'])['session_id'].nunique().reset_index(name='セッション数')
@@ -3617,26 +3351,40 @@ elif selected_analysis == "リアルタイムビュー":
     st.markdown('<div class="sub-header">リアルタイムビュー</div>', unsafe_allow_html=True)
     
     # 直近1時間のデータをフィルタリング
-    one_hour_ago = df['event_timestamp'].max() - timedelta(hours=1)
-    realtime_df = df[df['event_timestamp'] >= one_hour_ago]
+    # event_timestampはマイクロ秒単位の整数なので、datetimeに変換して比較するか、現在時刻をマイクロ秒にする
+    # ここではload_dataでdatetime変換済みと仮定したいが、ga4_data.pyではintで返しているため、
+    # main_v2.pyのload_dataで変換処理を追加する必要がある。
+    # いったんここで変換処理を入れる（load_data修正済みなら冗長だが安全）
+    if pd.api.types.is_numeric_dtype(df['event_timestamp']):
+        df['event_timestamp_dt'] = pd.to_datetime(df['event_timestamp'], unit='us')
+    else:
+        df['event_timestamp_dt'] = pd.to_datetime(df['event_timestamp'])
+
+    one_hour_ago = df['event_timestamp_dt'].max() - timedelta(hours=1)
+    realtime_df = df[df['event_timestamp_dt'] >= one_hour_ago]
     
     if len(realtime_df) > 0:
         # KPI計算
         rt_sessions = realtime_df['session_id'].nunique()
-        rt_avg_pages = realtime_df.groupby('session_id')['max_page_reached'].max().mean()
         rt_avg_stay = realtime_df['stay_ms'].mean() / 1000 if not realtime_df['stay_ms'].isnull().all() else 0
-        rt_fv_retention = (realtime_df[realtime_df['max_page_reached'] >= 2]['session_id'].nunique() / rt_sessions * 100) if rt_sessions > 0 else 0
         rt_avg_load = realtime_df['load_time_ms'].mean()
+        rt_avg_scroll = realtime_df.groupby('session_id')['scroll_depth'].max().mean()
+        
+        rt_read_through = (realtime_df[realtime_df['scroll_depth'] >= 90]['session_id'].nunique() / rt_sessions * 100) if rt_sessions > 0 else 0
+        
+        # 現在のアクティブユーザーは別途計算が必要なため、ここでは仮の値
+        rt_active_users = realtime_df['session_id'].nunique() # 直近1時間のユニークセッション数をアクティブユーザーとみなす
 
-        # KPI表示
-        st.markdown("#### 直近1時間のモニタリング")
-        st.markdown("直近1時間で急な変化や異常がないかを確認します")
-        kpi_cols = st.columns(5)
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("現在のアクティブユーザー", f"{rt_active_users}人")
+        col2.metric("直近1時間のセッション数", f"{rt_sessions}")
+        col3.metric("平均スクロール率", f"{rt_avg_scroll:.1f}%")
+        col4.metric("読了率 (90%)", f"{rt_read_through:.1f}%")
+
+        kpi_cols = st.columns(3)
         kpi_cols[0].metric("セッション数", f"{rt_sessions:,}")
-        kpi_cols[1].metric("平均到達ページ数", f"{rt_avg_pages:.1f}")
-        kpi_cols[2].metric("平均滞在時間", f"{rt_avg_stay:.1f}秒")
-        kpi_cols[3].metric("FV残存率", f"{rt_fv_retention:.1f}%")
-        kpi_cols[4].metric("平均読込時間", f"{rt_avg_load:.0f}ms")
+        kpi_cols[1].metric("平均滞在時間", f"{rt_avg_stay:.1f}秒")
+        kpi_cols[2].metric("平均読込時間", f"{rt_avg_load:.0f}ms")
 
         st.markdown("---")
 
@@ -3644,7 +3392,7 @@ elif selected_analysis == "リアルタイムビュー":
         st.markdown("#### 直近1時間のセッション数推移（10分単位）")
         st.markdown("直近1時間のセッション数を、10分ごとに集計して表示します")
         
-        realtime_df['minute_bin'] = realtime_df['event_timestamp'].dt.floor('10T')
+        realtime_df['minute_bin'] = realtime_df['event_timestamp_dt'].dt.floor('10T')
         rt_trend = realtime_df.groupby('minute_bin')['session_id'].nunique().reset_index()
         rt_trend.columns = ['時刻', 'セッション数']
 
@@ -4225,12 +3973,14 @@ elif selected_analysis == "AIによる分析・考察":
     conversion_rate = safe_rate(total_conversions, total_sessions) * 100
     total_clicks = len(filtered_df[filtered_df['event_name'] == 'click'])
     click_rate = safe_rate(total_clicks, total_sessions) * 100
-    avg_stay_time = filtered_df['stay_ms'].mean() / 1000  # 秒に変換
-    avg_pages_reached = filtered_df.groupby('session_id')['max_page_reached'].max().mean()
-    fv_retention_rate = safe_rate(filtered_df[filtered_df['max_page_reached'] >= 2]['session_id'].nunique(), total_sessions) * 100
-    final_cta_rate = safe_rate(filtered_df[filtered_df['max_page_reached'] >= 10]['session_id'].nunique(), total_sessions) * 100
     avg_load_time = filtered_df['load_time_ms'].mean()
+    avg_stay_time = filtered_df['stay_ms'].mean() / 1000  # 秒に変換
 
+    # 主要KPIの計算
+    avg_scroll_depth = filtered_df.groupby('session_id')['scroll_depth'].max().mean()
+    read_through_rate = safe_rate(filtered_df[filtered_df['scroll_depth'] >= 90]['session_id'].nunique(), total_sessions) * 100
+    cta_click_rate = safe_rate(filtered_df[filtered_df['event_name'] == 'click_cta']['session_id'].nunique(), total_sessions) * 100
+    
     st.markdown('<div class="sub-header">主要指標（KPI）</div>', unsafe_allow_html=True)
 
     # 比較機能をKPIヘッダーの下に配置
@@ -4284,11 +4034,12 @@ elif selected_analysis == "AIによる分析・考察":
         comp_total_clicks = len(comparison_df[comparison_df['event_name'] == 'click']) # type: ignore
         comp_click_rate = safe_rate(comp_total_clicks, comp_total_sessions) * 100
         comp_avg_stay_time = comparison_df['stay_ms'].mean() / 1000
-        comp_avg_pages_reached = comparison_df.groupby('session_id')['max_page_reached'].max().mean()
-        comp_fv_retention_rate = (comparison_df[comparison_df['max_page_reached'] >= 2]['session_id'].nunique() / comp_total_sessions * 100) if comp_total_sessions > 0 else 0
-        comp_final_cta_rate = (comparison_df[comparison_df['max_page_reached'] >= 10]['session_id'].nunique() / comp_total_sessions * 100) if comp_total_sessions > 0 else 0
         comp_avg_load_time = comparison_df['load_time_ms'].mean()
         
+        comp_avg_scroll_depth = comparison_df.groupby('session_id')['scroll_depth'].max().mean()
+        comp_read_through_rate = (comparison_df[comparison_df['scroll_depth'] >= 90]['session_id'].nunique() / comp_total_sessions * 100) if comp_total_sessions > 0 else 0
+        comp_cta_click_rate = (comparison_df[comparison_df['event_name'] == 'click_cta']['session_id'].nunique() / comp_total_sessions * 100) if comp_total_sessions > 0 else 0
+
         comp_kpis = {
             'sessions': comp_total_sessions,
             'conversions': comp_total_conversions,
@@ -4296,10 +4047,10 @@ elif selected_analysis == "AIによる分析・考察":
             'clicks': comp_total_clicks,
             'click_rate': comp_click_rate,
             'avg_stay_time': comp_avg_stay_time,
-            'avg_pages_reached': comp_avg_pages_reached,
-            'fv_retention_rate': comp_fv_retention_rate,
-            'final_cta_rate': comp_final_cta_rate,
-            'avg_load_time': comp_avg_load_time
+            'avg_load_time': comp_avg_load_time,
+            'avg_scroll_depth': comp_avg_scroll_depth,
+            'read_through_rate': comp_read_through_rate,
+            'cta_click_rate': comp_cta_click_rate
         }
 
     # KPIカード表示 (他のページからコピー)
@@ -4310,27 +4061,27 @@ elif selected_analysis == "AIによる分析・考察":
         delta_sessions = total_sessions - comp_kpis.get('sessions', 0) if comp_kpis else None
         st.metric("セッション数", f"{total_sessions:,}", delta=f"{delta_sessions:+,}" if delta_sessions is not None else None) # type: ignore
         
-        # FV残存率
-        delta_fv = fv_retention_rate - comp_kpis.get('fv_retention_rate', 0) if comp_kpis else None
-        st.metric("FV残存率", f"{fv_retention_rate:.1f}%", delta=f"{delta_fv:+.1f}%" if delta_fv is not None else None)
+        # 読了率 (90%)
+        delta_read = read_through_rate - comp_kpis.get('read_through_rate', 0) if comp_kpis else None
+        st.metric("読了率 (90%)", f"{read_through_rate:.1f}%", delta=f"{delta_read:+.1f}%" if delta_read is not None else None)
 
     with col2:
         # コンバージョン数
         delta_conversions = total_conversions - comp_kpis.get('conversions', 0) if comp_kpis else None
         st.metric("コンバージョン数", f"{total_conversions:,}", delta=f"{delta_conversions:+,}" if delta_conversions is not None else None) # type: ignore
 
-        # 最終CTA到達率
-        delta_cta = final_cta_rate - comp_kpis.get('final_cta_rate', 0) if comp_kpis else None
-        st.metric("最終CTA到達率", f"{final_cta_rate:.1f}%", delta=f"{delta_cta:+.1f}%" if delta_cta is not None else None)
+        # CTAクリック率
+        delta_cta = cta_click_rate - comp_kpis.get('cta_click_rate', 0) if comp_kpis else None
+        st.metric("CTAクリック率", f"{cta_click_rate:.1f}%", delta=f"{delta_cta:+.1f}%" if delta_cta is not None else None)
 
     with col3:
         # コンバージョン率
         delta_cvr = conversion_rate - comp_kpis.get('conversion_rate', 0) if comp_kpis else None
         st.metric("コンバージョン率", f"{conversion_rate:.2f}%", delta=f"{delta_cvr:+.2f}%" if delta_cvr is not None else None) # type: ignore
 
-        # 平均到達ページ数
-        delta_pages = avg_pages_reached - comp_kpis.get('avg_pages_reached', 0) if comp_kpis else None
-        st.metric("平均到達ページ数", f"{avg_pages_reached:.1f}", delta=f"{delta_pages:+.1f}" if delta_pages is not None else None)
+        # 平均スクロール率
+        delta_scroll = avg_scroll_depth - comp_kpis.get('avg_scroll_depth', 0) if comp_kpis else None
+        st.metric("平均スクロール率", f"{avg_scroll_depth:.1f}%", delta=f"{delta_scroll:+.1f}%" if delta_scroll is not None else None)
 
     with col4:
         # クリック数
@@ -4403,8 +4154,8 @@ elif selected_analysis == "AIによる分析・考察":
             - 全体CVR: {conversion_rate:.2f}%
             - 全体セッション数: {total_sessions}
             - 全体CV数: {total_conversions}
-            - FV残存率: {fv_retention_rate:.1f}%
-            - 最終CTA到達率: {final_cta_rate:.1f}%
+            - 読了率 (90%): {read_through_rate:.1f}%
+            - CTAクリック率: {cta_click_rate:.1f}%
             - 平均滞在時間: {avg_stay_time:.1f}秒
             - LPコンテンツのヘッドライン: {lp_text_content['headlines'][0] if lp_text_content['headlines'] else '取得不可'}
             """
@@ -4437,19 +4188,18 @@ elif selected_analysis == "AIによる分析・考察":
     st.markdown("### このページの分析について質問する")
     
     # FAQ用のデータ計算を事前に初期化
-    page_stats_global = pd.DataFrame(columns=['ページ番号', '離脱セッション数', '平均滞在時間_ms', '離脱率', '平均滞在時間_秒'])
+    page_stats_global = pd.DataFrame(columns=['スクロール深度', 'セッション数', '平均滞在時間'])
     ab_stats_global = pd.DataFrame(columns=['バリアント', 'セッション数', 'コンバージョン数', 'コンバージョン率']) # type: ignore
     device_stats_global = pd.DataFrame(columns=['デバイス', 'セッション数', 'コンバージョン数', 'コンバージョン率'])
 
     if not filtered_df.empty and total_sessions > 0:
-        # ページ別統計
-        page_stats_global = filtered_df.groupby('max_page_reached').agg(
-            離脱セッション数=('session_id', 'nunique'),
-            平均滞在時間_ms=('stay_ms', 'mean')
+        # ページ別統計 (スクロール深度別)
+        page_stats_global = filtered_df.groupby('scroll_depth').agg(
+            セッション数=('session_id', 'nunique'),
+            平均滞在時間=('stay_ms', 'mean')
         ).reset_index()
-        page_stats_global['離脱率'] = (page_stats_global['離脱セッション数'] / total_sessions * 100) if total_sessions > 0 else 0
-        page_stats_global['平均滞在時間_秒'] = page_stats_global['平均滞在時間_ms'] / 1000
-        page_stats_global.rename(columns={'max_page_reached': 'ページ番号'}, inplace=True) # type: ignore
+        page_stats_global['平均滞在時間'] = page_stats_global['平均滞在時間'] / 1000
+        page_stats_global.rename(columns={'scroll_depth': 'スクロール深度'}, inplace=True)
 
         # ab_variant列が存在する場合のみ集計
         if 'ab_variant' in filtered_df.columns and filtered_df['ab_variant'].notna().any():
@@ -4490,22 +4240,31 @@ elif selected_analysis == "AIによる分析・考察":
         
         if st.session_state.ai_faq_toggle.get(1, False): # type: ignore
             # 離脱率が最も高いページを特定（データがある場合のみ）
-            if not page_stats_global.empty and '離脱率' in page_stats_global.columns and not page_stats_global['離脱率'].empty:
-                max_exit_page = page_stats_global.loc[page_stats_global['離脱率'].idxmax()]
-                
-                st.info(f"""
-                **分析結果:**
-                
-                最大のボトルネックは**ページ{int(max_exit_page['ページ番号'])}**です。
-                
-                - 離脱率: {max_exit_page['離脱率']:.1f}%
-                - 平均滞在時間: {max_exit_page['平均滞在時間_秒']:.1f}秒
-                
-                **推奨アクション:**
-                1. ページ{int(max_exit_page['ページ番号'])}のコンテンツを見直し、ユーザーの関心を引く要素を追加
-                2. A/Bテストで異なるコンテンツをテスト
-                3. 読込時間が長い場合は、画像の最適化を検討
-                """)
+            if not page_stats_global.empty and 'セッション数' in page_stats_global.columns and not page_stats_global['セッション数'].empty:
+                # スクロール深度が低いほどボトルネックの可能性が高いと仮定
+                # ここでは最もセッション数が多く、かつスクロール深度が浅い部分をボトルネックと仮定
+                # 例: スクロール深度25%でセッション数が最も多い場合
+                if 25 in page_stats_global['スクロール深度'].values:
+                    bottleneck_depth = page_stats_global.loc[page_stats_global['スクロール深度'] == 25]
+                    if not bottleneck_depth.empty:
+                        bottleneck_depth_info = bottleneck_depth.iloc[0]
+                        st.info(f"""
+                        **分析結果:**
+                        
+                        最大のボトルネックは**スクロール深度{int(bottleneck_depth_info['スクロール深度'])}%**付近です。
+                        
+                        - この深度でのセッション数: {int(bottleneck_depth_info['セッション数']):,}
+                        - 平均滞在時間: {bottleneck_depth_info['平均滞在時間']:.1f}秒
+                        
+                        **推奨アクション:**
+                        1. スクロール深度{int(bottleneck_depth_info['スクロール深度'])}%までのコンテンツを見直し、ユーザーの関心を引く要素を追加
+                        2. ファーストビューからこの深度までのメッセージングを強化し、続きを読ませる工夫をする
+                        3. 読込時間が長い場合は、画像の最適化を検討
+                        """)
+                    else:
+                        st.warning("スクロール深度25%のデータがありません。")
+                else:
+                    st.warning("分析データがありません。")
             else:
                 st.warning("分析データがありません。")
         
@@ -4687,7 +4446,7 @@ elif selected_analysis == "専門用語解説":
         ファーストビューを見た後、次のセクションに進んだユーザーの割合。高いほどFVが効果的です。業界平均は60-80%程度。
         
         **スクロール率（Scroll Depth）**
-        ユーザーがページをどれだけスクロールしたかの割合。25%、50%、75%、100%で測定されることが多いです。100%はページの最後まで到達したことを意味します。
+        ユーザーがどれだけページをスクロールしたかの割合。25%、50%、75%、100%で測定されることが多いです。100%はページの最後まで到達したことを意味します。
         
         **CTA（Call To Action）**
         ユーザーに具体的な行動を促すボタンやリンク。「今すぐ購入」「無料で試す」「資料をダウンロード」など。LPの最重要要素です。
@@ -4841,27 +4600,26 @@ elif selected_analysis == "FAQ":
         """)
 
     st.markdown("#### 【データについて】")
-    with st.expander("Q7. 分析に使われているデータはどこから来ていますか？", expanded=False):
+    with st.expander("Q7. データの更新頻度は？", expanded=False):
         st.markdown("""
-        A7. BigQueryと連携し、その実データを直接参照して分析する仕組みです。
-        スワイプLPを多角的に分析できるよう100以上のデータ計測が可能です。
-        """)
-    with st.expander("Q8. データはリアルタイムに更新されますか？", expanded=False):
-        st.markdown("""
-        A8. いいえ。基本的にBigQueryのデータ更新と連動しており、瞬ジェネでは1日1回、早朝に更新される仕様です。
-        「リアルタイムビュー」のみ、直近1時間程度の準リアルタイムデータを確認できます。
+        A7. GA4と連携し、その実データを直接参照して分析する仕組みです。
+        データはGA4のAPI制限や更新頻度に依存しますが、通常は日次で更新されます。
         """)
 
-    st.markdown("#### 【料金・技術について】")
-    with st.expander("Q9. このアプリを利用するのに料金はかかりますか？", expanded=False):
+    with st.expander("Q8. リアルタイム分析は本当にリアルタイムですか？", expanded=False):
         st.markdown("""
-        A9. このアプリ自体の利用は無料です。
-        ただし、実データを分析するために利用するGoogle Cloud Platform (GCP) のサービス（BigQueryとGemini API）については、ご利用量に応じて料金が発生します。
+        A8. はい。GA4のRealtime APIを使用しているため、直近30分間のデータをリアルタイムに表示します。
         """)
-    with st.expander("Q10. BigQueryやGemini APIの料金は、どのくらいかかりますか？", expanded=False):
+
+    with st.expander("Q9. 過去のデータはいつまで遡れますか？", expanded=False):
         st.markdown("""
-        A10. 小規模な利用（月間10万アクセス、1日数回の分析）であれば、GCPの無料枠で収まるか、月額数百円〜数千円程度と想定されます。
-        GCPの予算アラート機能を設定すれば、予算消化に近づいたらメールで知らせてくれますので、想定外の費用が発生するのを防ぐことができるので安心です。
+        A9. GA4のデータ保持期間設定に依存します。標準では最大14ヶ月ですが、BigQuery連携を行っている場合はそれ以上の期間も保持可能です。
+        """)
+
+    with st.expander("Q10. GA4やGemini APIの料金は、どのくらいかかりますか？", expanded=False):
+        st.markdown("""
+        A10. 基本的に無料枠内で利用可能ですが、大量のデータ処理やAI分析を行う場合は、
+        Google Cloud Platform (GCP) の従量課金が発生する可能性があります。
         """)
 
     st.markdown("#### 【トラブルシューティング】")
@@ -5018,7 +4776,142 @@ elif selected_analysis == "アラート":
     else: # type: ignore
         st.info("アラートを生成するための十分なデータがありません（最低8日分のデータが必要です）。")
 
-elif selected_analysis == "瞬フォーム分析":
+elif selected_analysis == "ファネル分析":
+    st.markdown('<div class="sub-header">ファネル分析</div>', unsafe_allow_html=True)
+    
+    # --- 共通フィルター ---
+    st.markdown('<div class="sub-header">フィルター設定</div>', unsafe_allow_html=True)
+    filter_cols_1 = st.columns(4)
+    filter_cols_2 = st.columns(4)
+
+    with filter_cols_1[0]:
+        period_options = ["今日", "昨日", "過去7日間", "過去14日間", "過去30日間", "今月", "先月", "全期間", "カスタム"]
+        selected_period = st.selectbox("期間を選択", period_options, index=2, key="funnel_period")
+
+    with filter_cols_1[1]:
+        lp_options = sorted(df['page_location'].dropna().unique().tolist())
+        selected_lp = st.selectbox("LP選択", lp_options, index=0 if lp_options else None, key="funnel_lp", disabled=not lp_options)
+
+    with filter_cols_1[2]:
+        device_options = ["すべて"] + sorted(df['device_type'].dropna().unique().tolist())
+        selected_device = st.selectbox("デバイス選択", device_options, index=0, key="funnel_device")
+
+    with filter_cols_1[3]:
+        user_type_options = ["すべて", "新規", "リピート"]
+        selected_user_type = st.selectbox("新規/リピート", user_type_options, index=0, key="funnel_user_type")
+
+    with filter_cols_2[0]:
+        conversion_status_options = ["すべて", "コンバージョン", "非コンバージョン"]
+        selected_conversion_status = st.selectbox("CV/非CV", conversion_status_options, index=0, key="funnel_conversion_status")
+
+    with filter_cols_2[1]:
+        channel_options = ["すべて"] + sorted(df['channel'].unique().tolist())
+        selected_channel = st.selectbox("チャネル", channel_options, index=0, key="funnel_channel")
+
+    with filter_cols_2[2]:
+        source_medium_options = ["すべて"] + sorted(df['source_medium'].unique().tolist())
+        selected_source_medium = st.selectbox("参照元/メディア", source_medium_options, index=0, key="funnel_source_medium")
+
+    # 期間設定
+    today = df['event_date'].max().date()
+    if selected_period == "今日": start_date, end_date = today, today
+    elif selected_period == "昨日": start_date, end_date = today - timedelta(days=1), today - timedelta(days=1)
+    elif selected_period == "過去7日間": start_date, end_date = today - timedelta(days=6), today
+    elif selected_period == "過去14日間": start_date, end_date = today - timedelta(days=13), today
+    elif selected_period == "過去30日間": start_date, end_date = today - timedelta(days=29), today
+    elif selected_period == "今月": start_date, end_date = today.replace(day=1), today
+    elif selected_period == "先月":
+        last_month_end = today.replace(day=1) - timedelta(days=1)
+        start_date, end_date = last_month_end.replace(day=1), last_month_end
+    elif selected_period == "全期間": start_date, end_date = df['event_date'].min().date(), df['event_date'].max().date()
+    elif selected_period == "カスタム":
+        c1, c2 = st.columns(2)
+        with c1: start_date = st.date_input("開始日", df['event_date'].min(), key="funnel_start")
+        with c2: end_date = st.date_input("終了日", df['event_date'].max(), key="funnel_end")
+
+    # データフィルタリング
+    filtered_df = df[(df['event_date'] >= pd.to_datetime(start_date)) & (df['event_date'] <= pd.to_datetime(end_date))]
+    if selected_lp: filtered_df = filtered_df[filtered_df['page_location'] == selected_lp]
+    if selected_device != "すべて": filtered_df = filtered_df[filtered_df['device_type'] == selected_device]
+    if selected_user_type != "すべて": filtered_df = filtered_df[filtered_df['user_type'] == selected_user_type]
+    if selected_conversion_status != "すべて": filtered_df = filtered_df[filtered_df['conversion_status'] == selected_conversion_status]
+    if selected_channel != "すべて": filtered_df = filtered_df[filtered_df['channel'] == selected_channel]
+    if selected_source_medium != "すべて": filtered_df = filtered_df[filtered_df['source_medium'] == selected_source_medium]
+
+    if len(filtered_df) == 0:
+        st.warning("データがありません。")
+        st.stop()
+
+    # ファネルデータの作成
+    total_sessions = filtered_df['session_id'].nunique()
+    scroll_50 = filtered_df[filtered_df['scroll_depth'] >= 50]['session_id'].nunique()
+    read_through = filtered_df[filtered_df['scroll_depth'] >= 90]['session_id'].nunique()
+    cta_click = filtered_df[filtered_df['event_name'] == 'click_cta']['session_id'].nunique()
+    conversion = filtered_df[filtered_df['cv_type'].notna()]['session_id'].nunique()
+
+    funnel_data = pd.DataFrame({
+        '段階': ['セッション', 'スクロール50%', '読了(90%)', 'CTAクリック', 'コンバージョン'],
+        '数': [total_sessions, scroll_50, read_through, cta_click, conversion]
+    })
+
+    fig = go.Figure(go.Funnel(
+        y=funnel_data['段階'],
+        x=funnel_data['数'],
+        textinfo="value+percent initial"
+    ))
+    fig.update_layout(height=500)
+    st.plotly_chart(fig, use_container_width=True)
+
+    # AI分析
+    st.markdown("### AIによる分析と考察")
+    if 'funnel_ai_open' not in st.session_state:
+        st.session_state.funnel_ai_open = False
+
+    if st.button("AI分析を実行", key="funnel_ai_btn", type="primary", use_container_width=True):
+        st.session_state.funnel_ai_open = True
+
+    if st.session_state.funnel_ai_open:
+        with st.spinner("AIがファネルデータを分析中..."):
+            context = f"期間: {start_date}~{end_date}\nファネルデータ:\n{funnel_data.to_markdown()}"
+            prompt = "ファネルデータを基に、最大の離脱ポイントを特定し、改善策を提案してください。"
+            ai_response = generate_ai_insight(prompt, context)
+            st.markdown(ai_response)
+
+        if st.button("AI分析を閉じる", key="funnel_ai_close"):
+            st.session_state.funnel_ai_open = False
+
+    # --- よくある質問 ---
+    st.markdown("#### このページの分析について質問する")
+    if 'funnel_faq_toggle' not in st.session_state:
+        st.session_state.funnel_faq_toggle = {1: False, 2: False, 3: False, 4: False}
+
+    faq_cols = st.columns(2)
+    with faq_cols[0]:
+        if st.button("どこが最大のボトルネックですか？", key="faq_funnel_1", use_container_width=True):
+            st.session_state.funnel_faq_toggle[1] = not st.session_state.funnel_faq_toggle[1]
+            st.session_state.funnel_faq_toggle[2], st.session_state.funnel_faq_toggle[3], st.session_state.funnel_faq_toggle[4] = False, False, False
+        if st.session_state.funnel_faq_toggle[1]:
+            st.info("ファネルグラフで、前の段階からの減少幅（%）が最も大きい箇所がボトルネックです。例えば、「スクロール50%」から「読了」への減少が大きければ、コンテンツの中盤に問題があります。")
+        
+        if st.button("フォーム到達率が低い原因は？", key="faq_funnel_3", use_container_width=True):
+            st.session_state.funnel_faq_toggle[3] = not st.session_state.funnel_faq_toggle[3]
+            st.session_state.funnel_faq_toggle[1], st.session_state.funnel_faq_toggle[2], st.session_state.funnel_faq_toggle[4] = False, False, False
+        if st.session_state.funnel_faq_toggle[3]:
+            st.info("CTAボタン（申し込みボタン）のデザインや配置、文言が魅力的でない可能性があります。また、ボタンを押した後の遷移速度が遅い、エラーが出るなどの技術的な問題がないかも確認しましょう。")
+    with faq_cols[1]:
+        if st.button("CTAクリック率を上げるには？", key="faq_funnel_2", use_container_width=True):
+            st.session_state.funnel_faq_toggle[2] = not st.session_state.funnel_faq_toggle[2]
+            st.session_state.funnel_faq_toggle[1], st.session_state.funnel_faq_toggle[3], st.session_state.funnel_faq_toggle[4] = False, False, False
+        if st.session_state.funnel_faq_toggle[2]:
+            st.info("CTAボタンを「目立つ色」にする、「今すぐ無料で試す」などの「メリットが伝わる文言」にする、ボタンの近くに「マイクロコピー（安心材料など）」を配置する、などの改善が有効です。")
+        
+        if st.button("ファネル改善の優先順位は？", key="faq_funnel_4", use_container_width=True):
+            st.session_state.funnel_faq_toggle[4] = not st.session_state.funnel_faq_toggle[4]
+            st.session_state.funnel_faq_toggle[1], st.session_state.funnel_faq_toggle[2], st.session_state.funnel_faq_toggle[3] = False, False, False
+        if st.session_state.funnel_faq_toggle[4]:
+            st.info("基本的には「コンバージョンに近い段階」から改善するのが鉄則です。つまり、フォーム入力完了率 → CTAクリック率 → 読了率 → スクロール率 の順に見直すと、売上へのインパクトが出やすくなります。")
+
+elif selected_analysis == "フォーム分析":
      st.markdown('<div class="sub-header">瞬フォーム分析</div>', unsafe_allow_html=True)
  
      # --- フィルター設定 ---
