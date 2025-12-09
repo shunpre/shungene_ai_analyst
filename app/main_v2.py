@@ -68,6 +68,19 @@ if not st.session_state['is_logged_in']:
             font-weight: bold;
             margin-bottom: 1.5rem;
         }
+        /* 入力欄のスタイル強化 */
+        input[type="text"], input[type="password"] {
+            border: 2px solid #002060 !important;
+            background-color: #e6f0ff !important;
+            border-radius: 5px !important;
+            padding: 10px !important;
+            color: #333 !important;
+        }
+        /* ラベルのスタイル */
+        div[data-testid="stMarkdownContainer"] p {
+            font-weight: bold;
+            color: #002060;
+        }
     </style>
     """, unsafe_allow_html=True)
 
